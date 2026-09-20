@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from build import Garden, read_entities, build, strip_markdown
-from transit_reader import Reader, Tagged
+from build import HERE, Garden, build, load_base_css, read_entities, strip_markdown
+from transit_reader import Reader
 
 
 def node(title, uuid, **extra):
@@ -286,6 +286,63 @@ class PublishingTests(unittest.TestCase):
     def test_default_url_style_still_uuid(self):
         self.assertEqual(self.g.url_style, 'uuid')
         self.assertEqual(self.g.urls[2], '/page/security--' + self.ids[1] + '/')
+
+    def test_theme_css_replaces_garden_css(self):
+        theme_css_path = self.root / 'my-theme.css'
+        theme_css_path.write_text('body { color: hotpink; }')
+        config = {**self.config, 'theme_css': str(theme_css_path)}
+        css = load_base_css(config)
+        self.assertIn('hotpink', css)
+        self.assertNotIn('hotpink', (HERE / 'garden.css').read_text())
+
+    def test_theme_css_missing_file_raises_clear_error(self):
+        config = {**self.config, 'theme_css': str(self.root / 'does-not-exist.css')}
+        with self.assertRaises(FileNotFoundError):
+            load_base_css(config)
+
+    def test_exclude_pages_removes_page_and_degrades_links(self):
+        config = {**self.config, 'exclude_pages': ['Notes']}
+        g = Garden(self.nodes, self.root, config)
+        self.assertNotIn(5, g.pages)
+        self.assertNotIn('notes', g.names)
+        result = g.md.render('[[Notes]]')
+        self.assertIn('class="unavailable"', result)
+        self.assertIn('Notes', result)
+        self.assertNotIn('page-ref', result)
+
+    def test_base_path_normalizes_leading_and_trailing_slash(self):
+        config = {**self.config, 'base_path': 'logseq-faq/'}
+        g = Garden(self.nodes, self.root, config)
+        self.assertEqual(g.base_path, '/logseq-faq')
+        self.assertEqual(g.href('/'), '/logseq-faq/')
+
+    def test_base_path_defaults_to_empty(self):
+        self.assertEqual(self.g.base_path, '')
+        self.assertEqual(self.g.href('/pages/'), '/pages/')
+
+    def test_base_path_prefixes_all_absolute_urls_in_home_page(self):
+        config = {**self.config, 'base_path': '/x'}
+        g = Garden(self.nodes, self.root, config)
+        body = g.page_content(g.home)
+        html = g.shell(self.config['title'], body, g.urls[g.home], '/site/garden-abc.css',
+                        '/site/garden-abc.js', home=True, theme_js='/site/garden-abc.theme.js',
+                        crumbs=g.crumbs(g.home))
+        for attr in ('href', 'src'):
+            for match in re.finditer(attr + r'="([^"]*)"', html):
+                value = match.group(1)
+                if value.startswith('/'):
+                    self.assertTrue(value.startswith('/x/') or value == '/x',
+                                     f'{attr}="{value}" is absolute but not under base_path /x')
+        self.assertIn('data-base="/x"', html)
+
+    def test_base_path_prefixes_route_and_search_json_values(self):
+        config = {**self.config, 'base_path': '/x'}
+        g = Garden(self.nodes, self.root, config)
+        routes = {n['block/uuid']: g.href(g.urls[i]) for i, n in g.pages.items()}
+        for url in routes.values():
+            self.assertTrue(url.startswith('/x/') or url == '/x')
+        search_entry_url = g.href(g.urls[g.home])
+        self.assertTrue(search_entry_url.startswith('/x/') or search_entry_url == '/x')
 
 
 class SectionUrlTests(unittest.TestCase):

@@ -1,6 +1,7 @@
 /*! Copyright (c) 2026 Arney Nova. MIT License; see /licenses/MIT.txt. */
 /* Optional enhancements. All page content and navigation are ordinary HTML. */
 (() => {
+  const base = document.documentElement.dataset.base || '';
   const themeToggle = document.getElementById('theme-toggle');
   if (themeToggle) {
     const icon = themeToggle.querySelector('.theme-toggle-icon');
@@ -47,16 +48,16 @@
   };
   openAnchor();
   const legacy = async () => {
-    if (/^#\/graph\/?$/.test(location.hash)) { location.replace('/graph/'); return; }
+    if (/^#\/graph\/?$/.test(location.hash)) { location.replace(base + '/graph/'); return; }
     const match = location.hash.match(/^#\/(?:page|page-block)\/(.+)$/);
     if (!match) return;
     try {
-      const response = await fetch('/site/routes.json');
+      const response = await fetch(base + '/site/routes.json');
       if (!response.ok) throw new Error('Route index unavailable');
       const routes = await response.json();
       const name = decodeURIComponent(match[1]);
       const url = routes[name] || routes[name.toLowerCase()];
-      location.replace(url || '/pages/?q=' + encodeURIComponent(name));
+      location.replace(url || base + '/pages/?q=' + encodeURIComponent(name));
     } catch (error) {
       console.warn('Could not resolve the old garden link.', error);
     }
@@ -81,7 +82,7 @@
     }
     status.textContent = 'Searching…';
     try {
-      if (!dataPromise) dataPromise = fetch('/site/search.json').then(response => {
+      if (!dataPromise) dataPromise = fetch(base + '/site/search.json').then(response => {
         if (!response.ok) throw new Error('Search index unavailable');
         return response.json();
       }).catch(error => { dataPromise = null; throw error; });

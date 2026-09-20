@@ -173,11 +173,41 @@ blocks with no page reference are skipped). The navigation page itself is never
 published. If it's missing from the export or yields no pages, the build falls back to
 `"navigation"` and logs a warning.
 
+## Serving several sites from one builder
+
+Three `site.json` options let one exporter build several distinct sites:
+
+- `"theme_css"`: a path to a CSS file, resolved relative to the config file's own
+  directory. When set, this file replaces `garden.css` as the main stylesheet
+  (the Pygments code-highlighting styles are still appended after it, and
+  `graph.css` is still loaded separately for the graph page since it only
+  consumes CSS variables). Leaving it unset keeps the default `garden.css`. A
+  configured file that doesn't exist fails the build with a clear error before
+  anything is written.
+- `"base_path"`: a URL prefix for a site served from a sub-folder, e.g.
+  `"/logseq-faq"`. It's normalized to have a leading slash and no trailing
+  slash (`"logseq-faq/"` becomes `"/logseq-faq"`; an empty value stays `""`).
+  Every absolute URL the build emits — page links, breadcrumbs, the sidebar
+  and mobile navigation, `/pages/`, `/graph/`, `/assets/`, `/downloads/`,
+  hashed CSS/JS/JSON asset paths, favicons, canonical and `og:url` meta tags,
+  `sitemap.xml`, `robots.txt`, `routes.json`, and `search.json` — is prefixed
+  with it. Generated pages carry the prefix as `<html data-base="/logseq-faq">`,
+  and `garden.js`'s `fetch()` calls read that attribute so client-side search
+  and legacy-link redirects still resolve correctly. Files are still written
+  to disk at their normal relative paths under the output directory; only the
+  URLs embedded in the generated content change. This fits how GitHub Pages
+  already serves a repository's Pages output prefixed at `/<repo>/`.
+- `"exclude_pages"`: a list of page titles to drop from publishing even though
+  they'd otherwise be public. They're removed the same way the navigation
+  page itself is removed: dropped from the page set and from the name index,
+  so any link to them degrades to the existing "unresolved reference"
+  behavior (a plain, unlinked span) instead of rendering as a page link.
+
 ## Project files
 
 | File | Purpose |
 | --- | --- |
-| `site.json` | Generic defaults; publishers normally supply `SOURCE/site.json`; optional `author`/`license` render as the sidebar license note (a known `license` name such as `"CC BY 4.0"` is linked), optional `url_style` (see below) |
+| `site.json` | Generic defaults; publishers normally supply `SOURCE/site.json`; optional `author`/`license` render as the sidebar license note (a known `license` name such as `"CC BY 4.0"` is linked), optional `url_style` (see below), optional `theme_css`/`base_path`/`exclude_pages` (see "Serving several sites from one builder") |
 | `build.py` / `transit_reader.py` | Decode the graph, render pages, copy attachments, emit headers |
 | `garden.css` / `garden.js` | Main layout, search, legacy bookmarks |
 | `graph-layout.cjs` / `graph.js` / `graph.css` | Graph layout and browser viewer |

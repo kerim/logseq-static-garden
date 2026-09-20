@@ -147,6 +147,14 @@ def read_entities(db):
     return dict(entities)
 
 
+def normalize_base_path(raw):
+    """Ensure a leading slash and strip any trailing slash; '' stays ''."""
+    raw = (raw or '').strip()
+    if not raw:
+        return ''
+    return '/' + raw.strip('/')
+
+
 class Garden:
     def __init__(self, entities, source, config):
         self.entities, self.source, self.config = entities, source, config
@@ -154,6 +162,7 @@ class Garden:
         for name in ('logo.svg', 'logo.png'):
             if not (self.branding / name).is_file():
                 raise ValueError(f'Branding file missing: {self.branding / name}')
+        self.base_path = normalize_base_path(config.get('base_path', ''))
         self.warnings = set()
         self.assets = set()
         self.math = {}
@@ -172,6 +181,13 @@ class Garden:
                     self.warnings.add(f'Duplicate page name: {name}; UUID URLs remain distinct')
                 else:
                     self.names[key] = i
+        for excluded_title in config.get('exclude_pages', []):
+            excluded_eid = self.resolve(excluded_title)
+            if excluded_eid in self.pages:
+                for key, val in list(self.names.items()):
+                    if val == excluded_eid:
+                        del self.names[key]
+                del self.pages[excluded_eid]
         self.home = self.resolve(config['home_page'])
         if self.home not in self.pages:
             raise ValueError(f'Home page not found: {config["home_page"]}')
@@ -255,6 +271,10 @@ class Garden:
                 return original_link(tokens, idx, options, env)
             return self.md.renderer.renderToken(tokens, idx, options, env)
         self.md.renderer.rules['link_open'] = link_open
+
+    def href(self, path):
+        """Prefix a site-root-relative path (starting with '/') with base_path."""
+        return self.base_path + path
 
     def record_link(self, eid):
         target = self.owner(eid)
@@ -367,7 +387,7 @@ class Garden:
                 edges.add(tuple(sorted((eid, parent))))
         links = sorted((min(indices[a], indices[b]), max(indices[a], indices[b]))
                        for a, b in edges if a in indices and b in indices and a != b)
-        return {'nodes': [{'id': self.pages[i]['block/uuid'], 'title': self.label(i), 'url': self.urls[i],
+        return {'nodes': [{'id': self.pages[i]['block/uuid'], 'title': self.label(i), 'url': self.href(self.urls[i]),
                            'kind': 'home' if i == self.home else 'tag' if self.tagged[i] else 'page'}
                           for i in ids], 'links': links}
 
@@ -390,7 +410,7 @@ class Garden:
         owner = self.owner(eid)
         if owner not in self.urls:
             return None
-        return self.urls[owner] + ('' if eid == owner else '#block-' + self.entities[eid]['block/uuid'])
+        return self.href(self.urls[owner]) + ('' if eid == owner else '#block-' + self.entities[eid]['block/uuid'])
 
     def label(self, eid, seen=()):
         if eid in seen:
@@ -474,18 +494,18 @@ class Garden:
             return raw
         if raw.startswith('#/page/'):
             eid = self.resolve(raw[len('#/page/'):])
-            return self.url(eid) or '/pages/'
+            return self.url(eid) or self.href('/pages/')
         asset = self.asset_url(raw)
         if asset:
             return asset
         eid = self.resolve(raw)
         if eid is not None:
             self.record_link(eid)
-            return self.url(eid) or '/pages/'
+            return self.url(eid) or self.href('/pages/')
         if raw.startswith('#'):
             return raw
         self.warnings.add(f'Page link absent from export: {raw}')
-        return '/pages/?q=' + quote(raw)
+        return self.href('/pages/?q=' + quote(raw))
 
     def render_image(self, tokens, idx, options, env):
         token = tokens[idx]
@@ -628,7 +648,7 @@ class Garden:
             inner = '<ul class="outline">' + ''.join(self.block(c, ancestors) for c in self.children[target]) + '</ul>'
             if not self.config.get('embed_titles', True):
                 return f'<div class="embed page-embed">{inner}</div>'
-            title = f'<a class="page-ref" href="{escape(self.urls[target])}">{escape(self.label(target))}</a>'
+            title = f'<a class="page-ref" href="{escape(self.href(self.urls[target]))}">{escape(self.label(target))}</a>'
             return f'<div class="embed page-embed"><div class="embed-title">{title}</div>{inner}</div>'
         if target in self.entities and 'block/uuid' in self.entities[target] and 'block/name' not in self.entities[target]:
             return '<div class="embed block-embed"><ul class="outline">' + self.block(target, ancestors) + '</ul></div>'
@@ -640,12 +660,12 @@ class Garden:
         if eid == self.home:
             return [(self.config['title'], None)]
         if eid in self.nav_ids:
-            return [('Home', '/'), (self.label(eid), None)]
+            return [('Home', self.href('/')), (self.label(eid), None)]
         if self.url_style == 'sections':
             section = self.sections.get(eid)
             if section is not None:
-                return [('Home', '/'), (self.label(section), self.urls[section]), (self.label(eid), None)]
-            return [('Home', '/'), (self.label(eid), None)]
+                return [('Home', self.href('/')), (self.label(section), self.href(self.urls[section])), (self.label(eid), None)]
+            return [('Home', self.href('/')), (self.label(eid), None)]
         trail = []
         seen = set()
         cur = eid
@@ -655,14 +675,14 @@ class Garden:
             parent = self.pages[cur].get('block/parent')
             cur = parent if parent in self.pages else None
         trail.reverse()
-        crumbs = [('Home', '/')]
+        crumbs = [('Home', self.href('/'))]
         for i in trail[:-1]:
-            crumbs.append((self.label(i), self.urls[i]))
+            crumbs.append((self.label(i), self.href(self.urls[i])))
         crumbs.append((self.label(trail[-1]), None))
         return crumbs
 
     def page_list(self, ids):
-        return '<ul class="page-list">' + ''.join(f'<li><a href="{escape(self.urls[i])}">{escape(self.label(i))}</a></li>' for i in sorted(ids, key=lambda i: self.label(i).casefold())) + '</ul>'
+        return '<ul class="page-list">' + ''.join(f'<li><a href="{escape(self.href(self.urls[i]))}">{escape(self.label(i))}</a></li>' for i in sorted(ids, key=lambda i: self.label(i).casefold())) + '</ul>'
 
     def page_content(self, eid):
         self.current_page = eid
@@ -682,7 +702,7 @@ class Garden:
             body += f'<section class="connections"><details><summary><h2>Linked references <span>{len(backlinks)}</span></h2></summary>{self.page_list(backlinks)}</details></section>'
         if not children and not tagged and not backlinks:
             body += '<p class="muted">A seed in the garden. More notes to come.</p>'
-        body += f'<p><a class="graph-local" href="/graph/?page={n["block/uuid"]}">◌ Explore connections in Graph view</a></p>'
+        body += f'<p><a class="graph-local" href="{self.href("/graph/?page=" + n["block/uuid"])}">◌ Explore connections in Graph view</a></p>'
         if eid == self.home:
             body = body.replace('loading="lazy"', 'loading="eager" fetchpriority="high"', 1)
         return body
@@ -690,7 +710,7 @@ class Garden:
     def shell(self, title, body, url, css, js, *, home=False, description='', date='',
               extra_head='', theme_js='', crumbs=None):
         if crumbs is None:
-            crumbs = [('Home', '/'), (title, None)]
+            crumbs = [('Home', self.href('/')), (title, None)]
         crumb_items = []
         for label, href in crumbs:
             if href is not None:
@@ -703,11 +723,11 @@ class Garden:
             if eid in self.urls:
                 label = self.label(eid)
                 current = ' aria-current="page"' if url == self.urls[eid] else ''
-                nav.append(f'<a href="{escape(self.urls[eid])}"{current}><span class="nav-dot">◦</span>{escape(label)}</a>')
+                nav.append(f'<a href="{escape(self.href(self.urls[eid]))}"{current}><span class="nav-dot">◦</span>{escape(label)}</a>')
         site = escape(self.config['title'])
-        canonical = self.config.get('url', '').rstrip('/') + url
+        canonical = self.config.get('url', '').rstrip('/') + self.href(url)
         desc = escape(description or self.config['description'], quote=True)
-        subtitle = '' if home else '<p class="eyebrow"><a href="/pages/">THE GARDEN</a></p>'
+        subtitle = '' if home else f'<p class="eyebrow"><a href="{escape(self.href("/pages/"))}">THE GARDEN</a></p>'
         meta = f'<p class="page-meta">Updated {escape(date)}</p>' if date else ''
         logo_hash = sha256((self.branding / 'logo.svg').read_bytes()).hexdigest()[:12]
         document_title = site if home else escape(title) + ' · ' + site
@@ -737,24 +757,35 @@ class Garden:
         }
         def icon(label):
             return f'<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{icons[label]}</svg>'
-        mobile_links = ''.join(f'<a href="{href}"' + (' aria-current="page"' if url == href else '')
-                               + f'>{icon(label)}<span>{label}</span></a>'
-                               for label, href in [('Home', '/'), ('Pages', '/pages/'), ('Search', '/pages/#search'), ('Graph', '/graph/')])
+        mobile_links = ''
+        for label, raw_href in [('Home', '/'), ('Pages', '/pages/'), ('Search', '/pages/#search'), ('Graph', '/graph/')]:
+            current = ' aria-current="page"' if url == raw_href else ''
+            mobile_links += f'<a href="{escape(self.href(raw_href))}"{current}>{icon(label)}<span>{label}</span></a>'
         mobile_nav = f'''<nav class="mobile-nav" aria-label="Mobile navigation">{mobile_links}
 <details class="mobile-explore"><summary>{icon('Explore')}<span>Explore</span></summary>
-<div class="mobile-explore-panel"><p>Paths through the garden</p>{''.join(nav)}<a href="/licenses/">Licenses</a></div></details></nav>'''
+<div class="mobile-explore-panel"><p>Paths through the garden</p>{''.join(nav)}<a href="{escape(self.href("/licenses/"))}">Licenses</a></div></details></nav>'''
         return f'''<!doctype html>
-<html lang="{escape(self.config.get('language', 'en'))}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<html lang="{escape(self.config.get('language', 'en'))}" data-base="{escape(self.base_path)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>{document_title}</title><meta name="description" content="{desc}">
 <link rel="canonical" href="{escape(canonical, quote=True)}"><meta property="og:title" content="{escape(title, quote=True)}"><meta property="og:description" content="{desc}"><meta property="og:type" content="website"><meta property="og:url" content="{escape(canonical, quote=True)}">
-<link rel="icon" type="image/svg+xml" href="/site/logo-{logo_hash}.svg"><link rel="icon" type="image/png" sizes="512x512" href="/static/img/logo.png?v={logo_hash}"><link rel="apple-touch-icon" href="/static/img/logo.png?v={logo_hash}"><meta property="og:image" content="{escape(self.config.get('url', '').rstrip('/'), quote=True)}/static/img/logo.png"><script src="{theme_js}"></script><link rel="stylesheet" href="{css}"><script src="{js}" defer></script>{extra_head}</head>
+<link rel="icon" type="image/svg+xml" href="{escape(self.href(f'/site/logo-{logo_hash}.svg'), quote=True)}"><link rel="icon" type="image/png" sizes="512x512" href="{escape(self.href(f'/static/img/logo.png?v={logo_hash}'), quote=True)}"><link rel="apple-touch-icon" href="{escape(self.href(f'/static/img/logo.png?v={logo_hash}'), quote=True)}"><meta property="og:image" content="{escape(self.config.get('url', '').rstrip('/') + self.href('/static/img/logo.png'), quote=True)}"><script src="{escape(self.href(theme_js), quote=True)}"></script><link rel="stylesheet" href="{escape(self.href(css), quote=True)}"><script src="{escape(self.href(js), quote=True)}" defer></script>{extra_head}</head>
 <body><a class="skip" href="#content">Skip to content</a>
-<aside class="sidebar"><a class="brand" href="/"><span>{site}</span></a>
-<details class="site-nav" open><summary>Explore</summary><nav aria-label="Main navigation"><a href="/">⌂ &nbsp; Home</a><a href="/pages/">▤ &nbsp; All pages</a><a href="/pages/#search">⌕ &nbsp; Search</a><a href="/graph/">◌ &nbsp; Graph view</a><p class="nav-label">{escape(self.config.get('navigation_label', 'Topics'))}</p>{''.join(nav)}</nav></details>
+<aside class="sidebar"><a class="brand" href="{escape(self.href('/'))}"><span>{site}</span></a>
+<details class="site-nav" open><summary>Explore</summary><nav aria-label="Main navigation"><a href="{escape(self.href('/'))}">⌂ &nbsp; Home</a><a href="{escape(self.href('/pages/'))}">▤ &nbsp; All pages</a><a href="{escape(self.href('/pages/#search'))}">⌕ &nbsp; Search</a><a href="{escape(self.href('/graph/'))}">◌ &nbsp; Graph view</a><p class="nav-label">{escape(self.config.get('navigation_label', 'Topics'))}</p>{''.join(nav)}</nav></details>
 {sidebar_note}<button type="button" class="theme-toggle" id="theme-toggle" aria-pressed="false"><span class="theme-toggle-icon" aria-hidden="true">☾</span><span class="theme-toggle-label">Dark</span></button></aside>
-<div class="workspace"><header class="topbar">{breadcrumb}<a href="/pages/#search" aria-label="Search the garden">⌕ <span>Find a note</span></a></header>
+<div class="workspace"><header class="topbar">{breadcrumb}<a href="{escape(self.href('/pages/#search'))}" aria-label="Search the garden">⌕ <span>Find a note</span></a></header>
 <main id="content" class="{'graph-page' if url == '/graph/' else 'home' if home else 'note'}">{subtitle}<h1>{escape(title)}</h1>{meta}{body}</main>
-<footer>Made of curiosity. <a href="/licenses/">Licenses</a><a href="/pages/">Wander the garden ↗</a></footer></div>{mobile_nav}</body></html>'''
+<footer>Made of curiosity. <a href="{escape(self.href('/licenses/'))}">Licenses</a><a href="{escape(self.href('/pages/'))}">Wander the garden ↗</a></footer></div>{mobile_nav}</body></html>'''
+
+
+def load_base_css(config):
+    theme_css_path = config.get('theme_css')
+    if theme_css_path:
+        theme_css_path = Path(theme_css_path)
+        if not theme_css_path.is_file():
+            raise FileNotFoundError(f'theme_css not found: {theme_css_path}')
+        return theme_css_path.read_text()
+    return (HERE / 'garden.css').read_text()
 
 
 def render_math(garden):
@@ -816,7 +847,7 @@ def build(source, output, config):
                 license_files['licenses/' + target] = (source / name).read_bytes()
     entities = read_entities(load_export(source / 'index.html'))
     garden = Garden(entities, source, config)
-    css = (HERE / 'garden.css').read_text() + '\n' + HtmlFormatter(style='native').get_style_defs('pre')
+    css = load_base_css(config) + '\n' + HtmlFormatter(style='native').get_style_defs('pre')
     js = (HERE / 'garden.js').read_text()
     css_url = '/site/garden-' + sha256(css.encode()).hexdigest()[:12] + '.css'
     js_url = '/site/garden-' + sha256(js.encode()).hexdigest()[:12] + '.js'
@@ -830,13 +861,13 @@ def build(source, output, config):
         text = ' '.join(garden.label(i) for i, b in entities.items() if b.get('block/page') == eid)
         description = config['description'] if eid == garden.home else strip_markdown(text)[:170]
         documents[garden.urls[eid]] = garden.shell(title, body, garden.urls[eid], css_url, js_url, home=eid == garden.home, description=description, date=date, theme_js=theme_js_url, crumbs=garden.crumbs(eid))
-        search.append({'title':title, 'url':garden.urls[eid], 'text':text})
+        search.append({'title':title, 'url':garden.href(garden.urls[eid]), 'text':text})
     expected = {i for i, b in entities.items() if b.get('block/page') in garden.pages and i not in garden.pages}
     missed = expected - garden.rendered_ids
     if missed:
         raise ValueError(f'{len(missed)} exported blocks have not been rendered: {sorted(missed)[:20]}')
     search_body = f'''<p class="intro">{len(garden.pages)} notes, connected by curiosity.</p><label class="search-label" for="search">Find a page</label><input type="search" id="search" placeholder="Search titles and notes…" autocomplete="off"><p id="search-status" class="muted" role="status">Browse all pages below. Type to search.</p><div id="search-results">{garden.page_list(garden.pages)}</div>'''
-    documents['/pages/'] = garden.shell('All pages', search_body, '/pages/', css_url, js_url, theme_js=theme_js_url, crumbs=[('Home', '/'), ('All pages', None)])
+    documents['/pages/'] = garden.shell('All pages', search_body, '/pages/', css_url, js_url, theme_js=theme_js_url, crumbs=[('Home', garden.href('/')), ('All pages', None)])
     graph = garden.graph_data()
     positioned = subprocess.run(['node', str(HERE / 'graph-layout.cjs')], input=json.dumps(graph),
                                 text=True, capture_output=True, check=True).stdout
@@ -853,26 +884,26 @@ def build(source, output, config):
 </div><ul class="graph-results" id="graph-results" aria-label="Matching pages"></ul>
 <div class="graph-actions"><button id="graph-zoom-in" type="button" aria-label="Zoom in">+</button><button id="graph-zoom-out" type="button" aria-label="Zoom out">−</button><button id="graph-fit" type="button">Fit graph</button><button id="graph-clear" type="button">Clear selection</button></div>
 <p id="graph-status" class="graph-status" role="status">{len(graph['nodes'])} pages · {len(graph['links'])} connections · Loading graph…</p>
-<div id="graph" class="graph-shell" data-source="{graph_files['json'][0]}"><div class="graph-viewport"><canvas tabindex="0" role="img" aria-label="Graph of connected garden pages. Search for an accessible list of nodes. Arrow keys pan; plus and minus zoom; zero fits the graph."></canvas>
+<div id="graph" class="graph-shell" data-source="{garden.href(graph_files['json'][0])}"><div class="graph-viewport"><canvas tabindex="0" role="img" aria-label="Graph of connected garden pages. Search for an accessible list of nodes. Arrow keys pan; plus and minus zoom; zero fits the graph."></canvas>
 <div class="graph-legend"><span><i class="home-dot"></i>Home</span><span><i class="tag-dot"></i>Collections</span><span><i class="note-dot"></i>Notes</span></div><p class="graph-help">Drag to pan · Scroll or pinch to zoom · Select a dot to explore</p></div>
 <aside id="graph-detail" class="graph-detail" aria-label="Selected page"><h2>Follow a connection</h2></aside></div>
-<noscript><p>Enable JavaScript to explore the interactive graph. You can still <a href="/pages/">browse all pages</a> and follow linked references in each note.</p></noscript>'''
+<noscript><p>Enable JavaScript to explore the interactive graph. You can still <a href="{escape(garden.href('/pages/'))}">browse all pages</a> and follow linked references in each note.</p></noscript>'''
     documents['/graph/'] = garden.shell('Graph view', graph_body, '/graph/', css_url, js_url,
-                                      extra_head=f'<link rel="stylesheet" href="{graph_files["css"][0]}"><script defer src="{graph_files["js"][0]}"></script>', theme_js=theme_js_url,
-                                      crumbs=[('Home', '/'), ('Graph', None)])
-    credits = '''<p>The static exporter and its original browser code are licensed under the
-<a href="/licenses/MIT.txt">MIT License</a>, copyright 2026 Arney Nova.
+                                      extra_head=f'<link rel="stylesheet" href="{escape(garden.href(graph_files["css"][0]), quote=True)}"><script defer src="{escape(garden.href(graph_files["js"][0]), quote=True)}"></script>', theme_js=theme_js_url,
+                                      crumbs=[('Home', garden.href('/')), ('Graph', None)])
+    credits = f'''<p>The static exporter and its original browser code are licensed under the
+<a href="{escape(garden.href('/licenses/MIT.txt'), quote=True)}">MIT License</a>, copyright 2026 Arney Nova.
 Code highlighting includes Pygments stylesheet output under the
-<a href="/licenses/pygments/LICENSE.txt">BSD 2-Clause license</a>.</p>
+<a href="{escape(garden.href('/licenses/pygments/LICENSE.txt'), quote=True)}">BSD 2-Clause license</a>.</p>
 <p>Notes, attachments, screenshots, and branding retain their own rights.
 This is an unofficial project built for Logseq.</p>
-<p>See the repository's <a href="/licenses/PROJECT-LICENSE.md">license scope</a>
-and <a href="/licenses/THIRD_PARTY_NOTICES.md">third-party notices and source links</a>.
+<p>See the repository's <a href="{escape(garden.href('/licenses/PROJECT-LICENSE.md'), quote=True)}">license scope</a>
+and <a href="{escape(garden.href('/licenses/THIRD_PARTY_NOTICES.md'), quote=True)}">third-party notices and source links</a>.
 Publisher notices, when supplied, are listed separately below.</p>'''
-    credits += '<ul>' + ''.join(f'<li><a href="/{quote(name, safe="/")}">{escape(name.removeprefix("licenses/"))}</a></li>'
+    credits += '<ul>' + ''.join(f'<li><a href="{escape(garden.href("/" + quote(name, safe="/")), quote=True)}">{escape(name.removeprefix("licenses/"))}</a></li>'
                                for name in sorted(license_files)) + '</ul>'
-    documents['/licenses/'] = garden.shell('Licenses', credits, '/licenses/', css_url, js_url, theme_js=theme_js_url, crumbs=[('Home', '/'), ('Licenses', None)])
-    error_page = garden.shell('This path hasn’t grown yet.', '<p>This page may have moved. <a href="/pages/">Find it in the garden</a>.</p>', '/404.html', css_url, js_url, theme_js=theme_js_url, crumbs=[('Home', '/'), ('Not found', None)])
+    documents['/licenses/'] = garden.shell('Licenses', credits, '/licenses/', css_url, js_url, theme_js=theme_js_url, crumbs=[('Home', garden.href('/')), ('Licenses', None)])
+    error_page = garden.shell('This path hasn’t grown yet.', f'<p>This page may have moved. <a href="{escape(garden.href("/pages/"), quote=True)}">Find it in the garden</a>.</p>', '/404.html', css_url, js_url, theme_js=theme_js_url, crumbs=[('Home', garden.href('/')), ('Not found', None)])
     equations = render_math(garden)
     pattern = re.compile(r'<!--GARDEN_MATH_(\d+)-->')
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -894,8 +925,8 @@ Publisher notices, when supplied, are listed separately below.</p>'''
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(content)
         (dest / 'site/search.json').write_text(json.dumps(search, ensure_ascii=False, separators=(',', ':')), encoding='utf-8')
-        routes = {n['block/uuid']: garden.urls[i] for i,n in garden.pages.items()}
-        routes.update({name: garden.urls[i] for name,i in garden.names.items()})
+        routes = {n['block/uuid']: garden.href(garden.urls[i]) for i,n in garden.pages.items()}
+        routes.update({name: garden.href(garden.urls[i]) for name,i in garden.names.items()})
         # Legacy Logseq /page/<block UUID> links also work.
         routes.update({entities[i]['block/uuid']: garden.url(i) for i in garden.rendered_ids if garden.url(i)})
         (dest / 'site/routes.json').write_text(json.dumps(routes, ensure_ascii=False, separators=(',', ':')), encoding='utf-8')
@@ -916,9 +947,9 @@ Publisher notices, when supplied, are listed separately below.</p>'''
         shutil.copy2(logo, dest / f'site/logo-{logo_hash}.svg')
         (dest / '_headers').write_text(HEADERS, encoding='utf-8')
         base = config.get('url', '').rstrip('/')
-        sitemap = '<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + ''.join('<url><loc>' + escape(base + url) + '</loc></url>' for url in documents) + '</urlset>'
+        sitemap = '<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + ''.join('<url><loc>' + escape(base + garden.href(url)) + '</loc></url>' for url in documents) + '</urlset>'
         (dest / 'sitemap.xml').write_text(sitemap, encoding='utf-8')
-        (dest / 'robots.txt').write_text('User-agent: *\nAllow: /\nSitemap: ' + base + '/sitemap.xml\n')
+        (dest / 'robots.txt').write_text('User-agent: *\nAllow: /\nSitemap: ' + base + garden.base_path + '/sitemap.xml\n')
         (dest / '.static-garden-build').write_text('Generated by static-garden/build.py\n')
         report = {'pages':len(garden.pages), 'graph_nodes':len(graph['nodes']), 'graph_edges':len(graph['links']), 'graph_json_bytes':len(graph_json.encode()), 'graph_javascript_bytes':len(graph_js.encode()), 'blocks':len(garden.rendered_ids), 'assets':len(garden.assets), 'equations':len(equations), 'input_html_bytes':(source/'index.html').stat().st_size, 'homepage_html_bytes':(dest/'index.html').stat().st_size, 'css_bytes':len(css.encode()), 'javascript_bytes':len(js.encode()), 'warnings':sorted(garden.warnings)}
         # Build report lives next to the output, not inside the deployed website.
@@ -942,6 +973,8 @@ def main():
     if not config_path.is_file() and args.config is None:
         config_path = HERE / 'site.json'
     config = json.loads(config_path.read_text())
+    if config.get('theme_css'):
+        config['theme_css'] = str((config_path.parent / config['theme_css']).resolve())
     build(args.source, args.output or args.source / 'dist', config)
 
 
