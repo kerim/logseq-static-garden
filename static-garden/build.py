@@ -29,7 +29,7 @@ REF = re.compile(r'\[\[([^\]]+)\]\]|\(\(([^)]+)\)\)')
 INLINE_ASSETS = {'.png', '.jpg', '.jpeg', '.webp', '.gif', '.avif', '.ico',
                  '.mp3', '.ogg', '.wav', '.m4a', '.flac', '.mp4', '.webm', '.mov', '.pdf'}
 HEADERS = """/*
-  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' https:; font-src 'self'; connect-src 'self'; media-src 'self' https:; frame-src https://www.youtube-nocookie.com; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' https: data:; font-src 'self'; connect-src 'self'; media-src 'self' https:; frame-src https://www.youtube-nocookie.com; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
   X-Frame-Options: DENY
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
@@ -202,6 +202,9 @@ class Garden:
             tokens[idx].attrSet('href', href)
             if download_name(href) is not None:
                 tokens[idx].attrSet('download', download_name(href))
+            if self.is_external(href):
+                tokens[idx].attrJoin('class', 'external')
+                tokens[idx].attrSet('rel', 'noopener')
             if original_link:
                 return original_link(tokens, idx, options, env)
             return self.md.renderer.renderToken(tokens, idx, options, env)
@@ -307,6 +310,23 @@ class Garden:
             self.warnings.add(f'Missing asset: {path}')
         return '/' + quote(published_asset_path(path).as_posix(), safe='/') + (('#' + urlsplit(raw).fragment) if urlsplit(raw).fragment else '')
 
+    def is_external(self, href):
+        parts = urlsplit(href)
+        if parts.scheme.lower() not in ('http', 'https'):
+            return False
+        own_host = urlsplit(self.config.get('url') or '').netloc.lower()
+        if own_host.startswith('www.'):
+            own_host = own_host[4:]
+        if own_host in ('', 'example.com'):
+            own_host = None
+        host = parts.netloc.lower()
+        if host.startswith('www.'):
+            host = host[4:]
+        return own_host is None or host != own_host
+
+    def external_attrs(self, href):
+        return ' class="external" rel="noopener"' if self.is_external(href) else ''
+
     def link_url(self, raw):
         parts = urlsplit(raw)
         if parts.scheme or raw.startswith('//'):
@@ -381,10 +401,11 @@ class Garden:
                     href = self.url(v)
                     if not href and re.fullmatch(r'https?://\S+', label_text):
                         href = self.link_url(label_text)
-                    items.append(f'<a href="{escape(href)}"{download_attribute(href)}>{escape(label_text)}</a>' if href else self.md.renderInline(label_text))
+                    items.append(f'<a href="{escape(href)}"{download_attribute(href)}{self.external_attrs(href)}>{escape(label_text)}</a>' if href else self.md.renderInline(label_text))
                 elif isinstance(v, str):
                     if re.fullmatch(r'https?://\S+', v):
-                        items.append(f'<a href="{escape(self.link_url(v))}">{escape(v)}</a>')
+                        url = self.link_url(v)
+                        items.append(f'<a href="{escape(url)}"{self.external_attrs(url)}>{escape(v)}</a>')
                     else:
                         items.append(self.md.renderInline(v))
                 else:

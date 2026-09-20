@@ -158,6 +158,20 @@ class PublishingTests(unittest.TestCase):
         result = self.g.properties({'user.property/status':6})
         self.assertIn('Hidden', result)
 
+    def test_external_link_gets_external_class_and_rel(self):
+        text = self.g.md.render('[x](https://example.org/a)')
+        self.assertIn('class="external"', text)
+        self.assertIn('rel="noopener"', text)
+
+    def test_internal_links_do_not_get_external_class(self):
+        text = self.g.md.render('[[%s]] [t](/page/foo/)' % self.ids[0])
+        self.assertNotIn('external', text)
+
+    def test_url_property_value_gets_external_class(self):
+        self.g.property_entities['user.property/link'] = {'block/title':'Link'}
+        result = self.g.properties({'user.property/link':'https://example.org/a'})
+        self.assertIn('class="external"', result)
+
     def test_graph_contains_only_public_pages_and_deduplicated_edges(self):
         self.g.page_content(1)
         self.g.md.render('[[Security]] [security notes](Security)')
