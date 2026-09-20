@@ -440,8 +440,10 @@ class Garden:
             self.warnings.add(f'Recursive embed skipped: {self.entities[target].get("block/uuid")}')
             return '<p class="muted">Recursive embed</p>'
         if target in self.pages:
-            title = f'<a class="page-ref" href="{escape(self.urls[target])}">{escape(self.label(target))}</a>'
             inner = '<ul class="outline">' + ''.join(self.block(c, ancestors) for c in self.children[target]) + '</ul>'
+            if not self.config.get('embed_titles', True):
+                return f'<div class="embed page-embed">{inner}</div>'
+            title = f'<a class="page-ref" href="{escape(self.urls[target])}">{escape(self.label(target))}</a>'
             return f'<div class="embed page-embed"><div class="embed-title">{title}</div>{inner}</div>'
         if target in self.entities and 'block/uuid' in self.entities[target] and 'block/name' not in self.entities[target]:
             return '<div class="embed block-embed"><ul class="outline">' + self.block(target, ancestors) + '</ul></div>'

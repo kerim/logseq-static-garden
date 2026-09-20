@@ -98,6 +98,21 @@ class PublishingTests(unittest.TestCase):
         self.assertIn('class="embed block-embed"', content)
         self.assertIn('not public', content)
 
+    def test_embed_titles_false_omits_embed_title(self):
+        self.nodes[8] = node('', '11111111-1111-4111-8111-000000000008', **{'block/page':1,'block/parent':1,'block/order':'a2','block/link':2,'block/refs':[2]})
+        config = {**self.config, 'embed_titles': False}
+        g = Garden(self.nodes, self.root, config)
+        content = g.page_content(1)
+        self.assertIn('page-embed', content)
+        self.assertNotIn('embed-title', content)
+
+    def test_embed_titles_default_includes_embed_title(self):
+        self.nodes[8] = node('', '11111111-1111-4111-8111-000000000008', **{'block/page':1,'block/parent':1,'block/order':'a2','block/link':2,'block/refs':[2]})
+        g = Garden(self.nodes, self.root, self.config)
+        content = g.page_content(1)
+        self.assertIn('page-embed', content)
+        self.assertIn('embed-title', content)
+
     def test_recursive_embed_does_not_loop(self):
         self.nodes[8] = node('', '11111111-1111-4111-8111-000000000008', **{'block/page':1,'block/parent':1,'block/order':'a2','block/link':1,'block/refs':[1]})
         g = Garden(self.nodes, self.root, self.config)
