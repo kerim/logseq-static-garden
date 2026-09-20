@@ -164,6 +164,15 @@ references them:
   `graph`, `site`, `assets`, `licenses`, `downloads`, `404.html`, `robots.txt`,
   `sitemap.xml`, `_headers`).
 
+## Deriving navigation from a page
+
+Setting `"navigation_page"` to a page title (e.g. `"Topics"`) replaces `"navigation"`
+with the list of pages that page's top-level blocks reference, in block order (first
+`block/refs` entry, embed `block/link`, or `[[ref]]` in the title; duplicates and
+blocks with no page reference are skipped). The navigation page itself is never
+published. If it's missing from the export or yields no pages, the build falls back to
+`"navigation"` and logs a warning.
+
 ## Project files
 
 | File | Purpose |

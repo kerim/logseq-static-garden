@@ -184,7 +184,30 @@ class Garden:
         for ids in self.children.values():
             ids.sort(key=lambda i: (entities[i].get('block/order', ''), i))
         self.url_style = config.get('url_style', 'uuid')
-        self.nav_ids = [eid for eid in (self.resolve(label) for label in config.get('navigation', [])) if eid in self.pages]
+        nav_page_title = config.get('navigation_page')
+        self.nav_ids = None
+        if nav_page_title:
+            nav_page_eid = self.resolve(nav_page_title)
+            if nav_page_eid in self.pages:
+                derived = []
+                for b in self.children.get(nav_page_eid, ()):
+                    target = self._first_page_ref(b)
+                    if target is not None and target != nav_page_eid and target not in derived:
+                        derived.append(target)
+                # The navigation page itself is never published: it exists only
+                # to drive the sidebar/section/breadcrumb navigation order.
+                for key, val in list(self.names.items()):
+                    if val == nav_page_eid:
+                        del self.names[key]
+                del self.pages[nav_page_eid]
+                if derived:
+                    self.nav_ids = derived
+                else:
+                    self.warnings.add(f"navigation_page '{nav_page_title}' not found or empty; using config navigation")
+            else:
+                self.warnings.add(f"navigation_page '{nav_page_title}' not found or empty; using config navigation")
+        if self.nav_ids is None:
+            self.nav_ids = [eid for eid in (self.resolve(label) for label in config.get('navigation', [])) if eid in self.pages]
         self.sections = {}
         if self.url_style == 'sections':
             for nav_eid in self.nav_ids:
@@ -237,6 +260,25 @@ class Garden:
         target = self.owner(eid)
         if self.current_page in self.pages and target in self.pages and self.current_page != target:
             self.page_links.add(tuple(sorted((self.current_page, target))))
+
+    def _first_page_ref(self, block_eid):
+        """The first page a top-level navigation-page block points at, via a ref, an embed link, or a [[ref]] in its title."""
+        node = self.entities[block_eid]
+        for ref in values(node.get('block/refs')):
+            target = ref if ref in self.pages else self.owner(ref)
+            if target in self.pages:
+                return target
+        link = node.get('block/link')
+        if link is not None:
+            target = link if link in self.pages else self.owner(link)
+            if target in self.pages:
+                return target
+        for match in REF.finditer(node.get('block/title', '')):
+            resolved = self.resolve(match[1] or match[2])
+            target = resolved if resolved in self.pages else (self.owner(resolved) if resolved is not None else None)
+            if target in self.pages:
+                return target
+        return None
 
     def _section_targets(self, nav_eid):
         """Pages a navigation page reaches via refs, embeds, or [[links]] at any depth."""
@@ -597,8 +639,7 @@ class Garden:
         """Home > Parent > ... > Current trail, walking block/parent page ancestry."""
         if eid == self.home:
             return [(self.config['title'], None)]
-        nav_ids = {self.resolve(label) for label in self.config['navigation']}
-        if eid in nav_ids:
+        if eid in self.nav_ids:
             return [('Home', '/'), (self.label(eid), None)]
         if self.url_style == 'sections':
             section = self.sections.get(eid)
@@ -658,9 +699,9 @@ class Garden:
                 crumb_items.append(f'<li aria-current="page">{escape(label)}</li>')
         breadcrumb = f'<nav class="crumbs" aria-label="Breadcrumb"><ol>{"".join(crumb_items)}</ol></nav>'
         nav = []
-        for label in self.config['navigation']:
-            eid = self.resolve(label)
+        for eid in self.nav_ids:
             if eid in self.urls:
+                label = self.label(eid)
                 current = ' aria-current="page"' if url == self.urls[eid] else ''
                 nav.append(f'<a href="{escape(self.urls[eid])}"{current}><span class="nav-dot">◦</span>{escape(label)}</a>')
         site = escape(self.config['title'])

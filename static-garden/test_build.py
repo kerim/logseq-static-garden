@@ -335,5 +335,51 @@ class SectionUrlTests(unittest.TestCase):
         self.assertTrue(any('URL collision' in w for w in self.g.warnings))
 
 
+class NavigationPageTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.ids = ['33333333-3333-4333-8333-' + f'{i:012d}' for i in range(1, 10)]
+        self.nodes = {
+            1: node('Home', self.ids[0], **{'block/name': 'home'}),
+            2: node('Security', self.ids[1], **{'block/name': 'security'}),
+            3: node('Taiwan', self.ids[2], **{'block/name': 'taiwan'}),
+            4: node('Topics', self.ids[3], **{'block/name': 'topics'}),
+            # Block referencing Security via a [[Security]] link in its title.
+            5: node('[[Security]]', self.ids[4], **{'block/page': 4, 'block/parent': 4, 'block/order': 'a0', 'block/refs': [2]}),
+            # Embed block pointing at Taiwan (block/link, no title text).
+            6: node('', self.ids[5], **{'block/page': 4, 'block/parent': 4, 'block/order': 'a1', 'block/link': 3, 'block/refs': [3]}),
+            # Plain text block with no page reference: ignored.
+            7: node('Just some notes', self.ids[6], **{'block/page': 4, 'block/parent': 4, 'block/order': 'a2'}),
+            # A [[uuid]]-style duplicate reference to Security: dropped.
+            8: node('[[%s]]' % self.ids[1], self.ids[7], **{'block/page': 4, 'block/parent': 4, 'block/order': 'a3', 'block/refs': [2]})}
+        self.config = {'home_page': 'Home', 'title': 'My garden', 'navigation': ['Security'],
+                       'navigation_page': 'Topics', 'description': 'Notes'}
+        self.g = Garden(self.nodes, self.root, self.config)
+
+    def test_nav_order_follows_topics_page_blocks(self):
+        self.assertEqual(self.g.nav_ids, [2, 3])
+
+    def test_navigation_page_itself_is_not_published(self):
+        self.assertNotIn(4, self.g.pages)
+        self.assertNotIn(4, self.g.urls)
+        page_list_html = self.g.page_list(self.g.pages)
+        self.assertNotIn('Topics', page_list_html)
+
+    def test_missing_navigation_page_falls_back_with_warning(self):
+        config = {**self.config, 'navigation_page': 'No Such Page'}
+        g = Garden(self.nodes, self.root, config)
+        self.assertEqual(g.nav_ids, [2])
+        self.assertTrue(any("navigation_page 'No Such Page' not found or empty; using config navigation" in w
+                            for w in g.warnings))
+
+    def test_sections_url_style_uses_derived_navigation(self):
+        config = {**self.config, 'url_style': 'sections'}
+        g = Garden(self.nodes, self.root, config)
+        self.assertEqual(g.urls[2], '/security/')
+        self.assertEqual(g.urls[3], '/taiwan/')
+
+
 if __name__ == '__main__':
     unittest.main()
