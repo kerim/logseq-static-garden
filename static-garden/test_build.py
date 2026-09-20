@@ -204,6 +204,8 @@ class PublishingTests(unittest.TestCase):
                              home=True, crumbs=self.g.crumbs(1))
         self.assertEqual(len(re.findall(r'<li[ >]', html)), 1)
         self.assertIn('<li aria-current="page">My garden</li>', html)
+        self.assertRegex(html, r'<header class="topbar"><nav class="crumbs"[^>]*>.*?</nav>')
+        self.assertNotIn('/ garden</span>', html)
 
     def test_child_page_crumb_links_parent_and_leaves_child_unlinked(self):
         ids = self.ids + ['11111111-1111-4111-8111-' + f'{i:012d}' for i in range(8, 9)]
@@ -217,6 +219,8 @@ class PublishingTests(unittest.TestCase):
                         crumbs=crumbs)
         self.assertIn(f'<li><a href="{g.urls[2]}">Security</a></li>', html)
         self.assertIn('<li aria-current="page">Child Page</li>', html)
+        self.assertRegex(html, r'<header class="topbar"><nav class="crumbs"[^>]*>.*?</nav>')
+        self.assertNotIn('/ garden</span>', html)
 
     def test_output_cannot_replace_source_or_unrelated_files(self):
         with self.assertRaises(ValueError):

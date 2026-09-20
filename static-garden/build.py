@@ -613,8 +613,8 @@ class Garden:
 <aside class="sidebar"><a class="brand" href="/"><span>{site}</span></a>
 <details class="site-nav" open><summary>Explore</summary><nav aria-label="Main navigation"><a href="/">⌂ &nbsp; Home</a><a href="/pages/">▤ &nbsp; All pages</a><a href="/pages/#search">⌕ &nbsp; Search</a><a href="/graph/">◌ &nbsp; Graph view</a><p class="nav-label">PATHS THROUGH THE GARDEN</p>{''.join(nav)}</nav></details>
 {sidebar_note}<button type="button" class="theme-toggle" id="theme-toggle" aria-pressed="false"><span class="theme-toggle-icon" aria-hidden="true">☾</span><span class="theme-toggle-label">Dark</span></button></aside>
-<div class="workspace"><header class="topbar"><a href="/">{site}<span> / {('home' if home else 'garden')}</span></a><a href="/pages/#search" aria-label="Search the garden">⌕ <span>Find a note</span></a></header>
-<main id="content" class="{'graph-page' if url == '/graph/' else 'home' if home else 'note'}">{breadcrumb}{subtitle}<h1>{escape(title)}</h1>{meta}{body}</main>
+<div class="workspace"><header class="topbar">{breadcrumb}<a href="/pages/#search" aria-label="Search the garden">⌕ <span>Find a note</span></a></header>
+<main id="content" class="{'graph-page' if url == '/graph/' else 'home' if home else 'note'}">{subtitle}<h1>{escape(title)}</h1>{meta}{body}</main>
 <footer>Made of curiosity. <a href="/licenses/">Licenses</a><a href="/pages/">Wander the garden ↗</a></footer></div>{mobile_nav}</body></html>'''
 
 
