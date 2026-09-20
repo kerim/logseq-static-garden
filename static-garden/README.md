@@ -145,13 +145,13 @@ a corresponding public page body.
 
 | File | Purpose |
 | --- | --- |
-| `site.json` | Generic defaults; publishers normally supply `SOURCE/site.json` |
+| `site.json` | Generic defaults; publishers normally supply `SOURCE/site.json`; optional `author`/`license` render as the sidebar license note (a known `license` name such as `"CC BY 4.0"` is linked) |
 | `build.py` / `transit_reader.py` | Decode the graph, render pages, copy attachments, emit headers |
 | `garden.css` / `garden.js` | Main layout, search, legacy bookmarks |
 | `graph-layout.cjs` / `graph.js` / `graph.css` | Graph layout and browser viewer |
 | `branding/logo.svg` / `logo.png` | Generic default logo; overridden by `SOURCE/branding/` |
 
-Branding is copied to the hashed SVG used in the sidebar, `static/img/logo.png`,
+Branding is copied to the hashed SVG used for the favicon, `static/img/logo.png`,
 and `favicon.png` in the output. Generated pages also include canonical URLs,
 a sitemap, and a real `404.html` rather than an SPA fallback.
 

@@ -24,6 +24,9 @@ from transit_reader import load_export
 HERE = Path(__file__).resolve().parent
 UUID = re.compile(r'^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$')
 REF = re.compile(r'\[\[([^\]]+)\]\]|\(\(([^)]+)\)\)')
+# Fixed URL map for known license names. A config "license" that isn't listed
+# here is rendered as plain text (no link).
+LICENSE_URLS = {'CC BY 4.0': 'https://creativecommons.org/licenses/by/4.0/'}
 # Only these attachment formats can be opened on the site's origin. Everything
 # else gets an inert extension and download-only response headers.
 INLINE_ASSETS = {'.png', '.jpg', '.jpeg', '.webp', '.gif', '.avif', '.ico',
@@ -537,6 +540,23 @@ class Garden:
         meta = f'<p class="page-meta">Updated {escape(date)}</p>' if date else ''
         logo_hash = sha256((self.branding / 'logo.svg').read_bytes()).hexdigest()[:12]
         document_title = site + ' · Portfolio & Garden' if home else escape(title) + ' · ' + site
+        author = self.config.get('author')
+        license_config = self.config.get('license')
+        license_name, license_url = None, None
+        if isinstance(license_config, dict):
+            license_name, license_url = license_config.get('name'), license_config.get('url')
+        elif license_config:
+            license_name = license_config
+            license_url = LICENSE_URLS.get(license_name)
+        note_parts = []
+        if license_name:
+            license_html = escape(license_name)
+            if license_url:
+                license_html = f'<a href="{escape(license_url, quote=True)}" rel="license">{license_html}</a>'
+            note_parts.append(license_html)
+        if author:
+            note_parts.append(escape(author))
+        sidebar_note = f'<div class="sidebar-note">{" · ".join(note_parts)}</div>' if note_parts else ''
         icons = {
             'Home': '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/>',
             'Pages': '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h4"/>',
@@ -558,9 +578,9 @@ class Garden:
 <link rel="canonical" href="{escape(canonical, quote=True)}"><meta property="og:title" content="{escape(title, quote=True)}"><meta property="og:description" content="{desc}"><meta property="og:type" content="website"><meta property="og:url" content="{escape(canonical, quote=True)}">
 <link rel="icon" type="image/svg+xml" href="/site/logo-{logo_hash}.svg"><link rel="icon" type="image/png" sizes="512x512" href="/static/img/logo.png?v={logo_hash}"><link rel="apple-touch-icon" href="/static/img/logo.png?v={logo_hash}"><meta property="og:image" content="{escape(self.config.get('url', '').rstrip('/'), quote=True)}/static/img/logo.png"><script src="{theme_js}"></script><link rel="stylesheet" href="{css}"><script src="{js}" defer></script>{extra_head}</head>
 <body><a class="skip" href="#content">Skip to content</a>
-<aside class="sidebar"><a class="brand" href="/"><img class="brand-logo" src="/site/logo-{logo_hash}.svg" width="38" height="38" alt=""><span>{site}<small>portfolio & digital garden</small></span></a>
+<aside class="sidebar"><a class="brand" href="/"><span>{site}</span></a>
 <details class="site-nav" open><summary>Explore</summary><nav aria-label="Main navigation"><a href="/">⌂ &nbsp; Home</a><a href="/pages/">▤ &nbsp; All pages</a><a href="/pages/#search">⌕ &nbsp; Search</a><a href="/graph/">◌ &nbsp; Graph view</a><p class="nav-label">PATHS THROUGH THE GARDEN</p>{''.join(nav)}</nav></details>
-<div class="sidebar-note"><span class="status-dot"></span> Always growing.<p>Notes, things I make,<br>and things I’m figuring out.</p></div><button type="button" class="theme-toggle" id="theme-toggle" aria-pressed="false"><span class="theme-toggle-icon" aria-hidden="true">☾</span><span class="theme-toggle-label">Dark</span></button></aside>
+{sidebar_note}<button type="button" class="theme-toggle" id="theme-toggle" aria-pressed="false"><span class="theme-toggle-icon" aria-hidden="true">☾</span><span class="theme-toggle-label">Dark</span></button></aside>
 <div class="workspace"><header class="topbar"><a href="/">{site}<span> / {('home' if home else 'garden')}</span></a><a href="/pages/#search" aria-label="Search the garden">⌕ <span>Find a note</span></a></header>
 <main id="content" class="{'graph-page' if url == '/graph/' else 'home' if home else 'note'}">{subtitle}<h1>{escape(title)}</h1>{meta}{body}</main>
 <footer>Made of curiosity. <a href="/licenses/">Licenses</a><a href="/pages/">Wander the garden ↗</a></footer></div>{mobile_nav}</body></html>'''
