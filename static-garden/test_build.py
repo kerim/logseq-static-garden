@@ -1,4 +1,5 @@
 """Regression tests for export decoding and publishing behavior."""
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -197,6 +198,25 @@ class PublishingTests(unittest.TestCase):
     def test_sidebar_note_empty_without_author_or_license(self):
         html = self.g.shell('Home', '<p>body</p>', '/', '/site/x.css', '/site/x.js')
         self.assertNotIn('sidebar-note', html)
+
+    def test_home_page_shell_has_a_single_unlinked_crumb(self):
+        html = self.g.shell('Home', '<p>body</p>', '/', '/site/x.css', '/site/x.js',
+                             home=True, crumbs=self.g.crumbs(1))
+        self.assertEqual(len(re.findall(r'<li[ >]', html)), 1)
+        self.assertIn('<li aria-current="page">My garden</li>', html)
+
+    def test_child_page_crumb_links_parent_and_leaves_child_unlinked(self):
+        ids = self.ids + ['11111111-1111-4111-8111-' + f'{i:012d}' for i in range(8, 9)]
+        nodes = {**self.nodes,
+                 8: node('Child Page', ids[7], **{'block/name': 'child page',
+                                                   'block/parent': 2})}
+        g = Garden(nodes, self.root, self.config)
+        crumbs = g.crumbs(8)
+        self.assertEqual([label for label, _ in crumbs], ['Home', 'Security', 'Child Page'])
+        html = g.shell('Child Page', '<p>body</p>', g.urls[8], '/site/x.css', '/site/x.js',
+                        crumbs=crumbs)
+        self.assertIn(f'<li><a href="{g.urls[2]}">Security</a></li>', html)
+        self.assertIn('<li aria-current="page">Child Page</li>', html)
 
     def test_output_cannot_replace_source_or_unrelated_files(self):
         with self.assertRaises(ValueError):

@@ -500,6 +500,28 @@ class Garden:
         self.warnings.add(f'Embed target not exported: {target}')
         return '<p class="muted">Embedded content is not public</p>'
 
+    def crumbs(self, eid):
+        """Home > Parent > ... > Current trail, walking block/parent page ancestry."""
+        if eid == self.home:
+            return [(self.config['title'], None)]
+        nav_ids = {self.resolve(label) for label in self.config['navigation']}
+        if eid in nav_ids:
+            return [('Home', '/'), (self.label(eid), None)]
+        trail = []
+        seen = set()
+        cur = eid
+        while cur in self.pages and cur not in seen and cur != self.home:
+            seen.add(cur)
+            trail.append(cur)
+            parent = self.pages[cur].get('block/parent')
+            cur = parent if parent in self.pages else None
+        trail.reverse()
+        crumbs = [('Home', '/')]
+        for i in trail[:-1]:
+            crumbs.append((self.label(i), self.urls[i]))
+        crumbs.append((self.label(trail[-1]), None))
+        return crumbs
+
     def page_list(self, ids):
         return '<ul class="page-list">' + ''.join(f'<li><a href="{escape(self.urls[i])}">{escape(self.label(i))}</a></li>' for i in sorted(ids, key=lambda i: self.label(i).casefold())) + '</ul>'
 
@@ -526,7 +548,17 @@ class Garden:
             body = body.replace('loading="lazy"', 'loading="eager" fetchpriority="high"', 1)
         return body
 
-    def shell(self, title, body, url, css, js, *, home=False, description='', date='', extra_head='', theme_js=''):
+    def shell(self, title, body, url, css, js, *, home=False, description='', date='',
+              extra_head='', theme_js='', crumbs=None):
+        if crumbs is None:
+            crumbs = [('Home', '/'), (title, None)]
+        crumb_items = []
+        for label, href in crumbs:
+            if href is not None:
+                crumb_items.append(f'<li><a href="{escape(href)}">{escape(label)}</a></li>')
+            else:
+                crumb_items.append(f'<li aria-current="page">{escape(label)}</li>')
+        breadcrumb = f'<nav class="crumbs" aria-label="Breadcrumb"><ol>{"".join(crumb_items)}</ol></nav>'
         nav = []
         for label in self.config['navigation']:
             eid = self.resolve(label)
@@ -582,7 +614,7 @@ class Garden:
 <details class="site-nav" open><summary>Explore</summary><nav aria-label="Main navigation"><a href="/">⌂ &nbsp; Home</a><a href="/pages/">▤ &nbsp; All pages</a><a href="/pages/#search">⌕ &nbsp; Search</a><a href="/graph/">◌ &nbsp; Graph view</a><p class="nav-label">PATHS THROUGH THE GARDEN</p>{''.join(nav)}</nav></details>
 {sidebar_note}<button type="button" class="theme-toggle" id="theme-toggle" aria-pressed="false"><span class="theme-toggle-icon" aria-hidden="true">☾</span><span class="theme-toggle-label">Dark</span></button></aside>
 <div class="workspace"><header class="topbar"><a href="/">{site}<span> / {('home' if home else 'garden')}</span></a><a href="/pages/#search" aria-label="Search the garden">⌕ <span>Find a note</span></a></header>
-<main id="content" class="{'graph-page' if url == '/graph/' else 'home' if home else 'note'}">{subtitle}<h1>{escape(title)}</h1>{meta}{body}</main>
+<main id="content" class="{'graph-page' if url == '/graph/' else 'home' if home else 'note'}">{breadcrumb}{subtitle}<h1>{escape(title)}</h1>{meta}{body}</main>
 <footer>Made of curiosity. <a href="/licenses/">Licenses</a><a href="/pages/">Wander the garden ↗</a></footer></div>{mobile_nav}</body></html>'''
 
 
@@ -658,14 +690,14 @@ def build(source, output, config):
         date = datetime.fromtimestamp(n['block/updated-at'] / 1000, timezone.utc).strftime('%d %b %Y') if n.get('block/updated-at') else ''
         text = ' '.join(garden.label(i) for i, b in entities.items() if b.get('block/page') == eid)
         description = re.sub(r'\s+', ' ', text).strip()[:170]
-        documents[garden.urls[eid]] = garden.shell(title, body, garden.urls[eid], css_url, js_url, home=eid == garden.home, description=description, date=date, theme_js=theme_js_url)
+        documents[garden.urls[eid]] = garden.shell(title, body, garden.urls[eid], css_url, js_url, home=eid == garden.home, description=description, date=date, theme_js=theme_js_url, crumbs=garden.crumbs(eid))
         search.append({'title':title, 'url':garden.urls[eid], 'text':text})
     expected = {i for i, b in entities.items() if b.get('block/page') in garden.pages and i not in garden.pages}
     missed = expected - garden.rendered_ids
     if missed:
         raise ValueError(f'{len(missed)} exported blocks have not been rendered: {sorted(missed)[:20]}')
     search_body = f'''<p class="intro">{len(garden.pages)} notes, connected by curiosity.</p><label class="search-label" for="search">Find a page</label><input type="search" id="search" placeholder="Search titles and notes…" autocomplete="off"><p id="search-status" class="muted" role="status">Browse all pages below. Type to search.</p><div id="search-results">{garden.page_list(garden.pages)}</div>'''
-    documents['/pages/'] = garden.shell('All pages', search_body, '/pages/', css_url, js_url, theme_js=theme_js_url)
+    documents['/pages/'] = garden.shell('All pages', search_body, '/pages/', css_url, js_url, theme_js=theme_js_url, crumbs=[('Home', '/'), ('All pages', None)])
     graph = garden.graph_data()
     positioned = subprocess.run(['node', str(HERE / 'graph-layout.cjs')], input=json.dumps(graph),
                                 text=True, capture_output=True, check=True).stdout
@@ -687,7 +719,8 @@ def build(source, output, config):
 <aside id="graph-detail" class="graph-detail" aria-label="Selected page"><h2>Follow a connection</h2></aside></div>
 <noscript><p>Enable JavaScript to explore the interactive graph. You can still <a href="/pages/">browse all pages</a> and follow linked references in each note.</p></noscript>'''
     documents['/graph/'] = garden.shell('Graph view', graph_body, '/graph/', css_url, js_url,
-                                      extra_head=f'<link rel="stylesheet" href="{graph_files["css"][0]}"><script defer src="{graph_files["js"][0]}"></script>', theme_js=theme_js_url)
+                                      extra_head=f'<link rel="stylesheet" href="{graph_files["css"][0]}"><script defer src="{graph_files["js"][0]}"></script>', theme_js=theme_js_url,
+                                      crumbs=[('Home', '/'), ('Graph', None)])
     credits = '''<p>The static exporter and its original browser code are licensed under the
 <a href="/licenses/MIT.txt">MIT License</a>, copyright 2026 Arney Nova.
 Code highlighting includes Pygments stylesheet output under the
@@ -699,8 +732,8 @@ and <a href="/licenses/THIRD_PARTY_NOTICES.md">third-party notices and source li
 Publisher notices, when supplied, are listed separately below.</p>'''
     credits += '<ul>' + ''.join(f'<li><a href="/{quote(name, safe="/")}">{escape(name.removeprefix("licenses/"))}</a></li>'
                                for name in sorted(license_files)) + '</ul>'
-    documents['/licenses/'] = garden.shell('Licenses', credits, '/licenses/', css_url, js_url, theme_js=theme_js_url)
-    error_page = garden.shell('This path hasn’t grown yet.', '<p>This page may have moved. <a href="/pages/">Find it in the garden</a>.</p>', '/404.html', css_url, js_url, theme_js=theme_js_url)
+    documents['/licenses/'] = garden.shell('Licenses', credits, '/licenses/', css_url, js_url, theme_js=theme_js_url, crumbs=[('Home', '/'), ('Licenses', None)])
+    error_page = garden.shell('This path hasn’t grown yet.', '<p>This page may have moved. <a href="/pages/">Find it in the garden</a>.</p>', '/404.html', css_url, js_url, theme_js=theme_js_url, crumbs=[('Home', '/'), ('Not found', None)])
     equations = render_math(garden)
     pattern = re.compile(r'<!--GARDEN_MATH_(\d+)-->')
     output.parent.mkdir(parents=True, exist_ok=True)
