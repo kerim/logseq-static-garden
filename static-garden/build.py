@@ -424,7 +424,7 @@ class Garden:
             body += '<p class="muted">Query source</p>'
         body += self.properties(n)
         children = self.children[eid]
-        nested = '<ul class="outline">' + ''.join(self.block(c, (*ancestors, eid)) for c in children) + '</ul>' if children else ''
+        nested = '<ul class="outline">' + self.blocks(children, (*ancestors, eid)) + '</ul>' if children else ''
         anchor = 'block-' + n['block/uuid']
         permalink = f'<a class="bullet" href="#{anchor}" aria-label="Link to this block">•</a>'
         if children:
@@ -433,6 +433,32 @@ class Garden:
         else:
             content = '<div class="block-body">' + body + '</div>'
         return f'<li class="block" id="{anchor}">{permalink}{content}</li>'
+
+    def blocks(self, ids, ancestors):
+        if self.config.get('embed_style', 'boxed') != 'inline':
+            return ''.join(self.block(c, ancestors) for c in ids)
+        parts = []
+        for c in ids:
+            n = self.entities[c]
+            link = n.get('block/link')
+            text = n.get('block/title', '')
+            if link is None or text.strip():
+                parts.append(self.block(c, ancestors))
+                continue
+            target = link
+            if target in ancestors:
+                self.rendered_ids.add(c)
+                self.warnings.add(f'Recursive embed skipped: {n.get("block/uuid")}')
+                parts.append('<li class="block muted">Recursive embed</li>')
+            elif target in self.pages:
+                self.rendered_ids.add(c)
+                parts.append(self.blocks(self.children[target], (*ancestors, c, target)))
+            elif target in self.entities and 'block/uuid' in self.entities[target] and 'block/name' not in self.entities[target]:
+                self.rendered_ids.add(c)
+                parts.append(self.block(target, ancestors))
+            else:
+                parts.append(self.block(c, ancestors))
+        return ''.join(parts)
 
     def embed(self, target, ancestors):
         # DB graphs store {{embed}} as an empty block whose block/link points at a page or block.
@@ -459,7 +485,7 @@ class Garden:
         children = self.children[eid]
         # Include exported orphan roots, so missing parents cannot silently lose content.
         orphans = [i for i, b in self.entities.items() if b.get('block/page') == eid and b.get('block/parent') not in self.entities and i not in children]
-        body = self.properties(n) + '<ul class="outline root-outline">' + ''.join(self.block(i, (eid,)) for i in children + orphans) + '</ul>'
+        body = self.properties(n) + '<ul class="outline root-outline">' + self.blocks(children + orphans, (eid,)) + '</ul>'
         child_pages = {i for i, page in self.pages.items() if page.get('block/parent') == eid}
         if child_pages:
             body += f'<section class="connections"><h2>Pages within</h2>{self.page_list(child_pages)}</section>'

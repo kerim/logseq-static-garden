@@ -120,6 +120,21 @@ class PublishingTests(unittest.TestCase):
         self.assertIn('Recursive embed', content)
         self.assertTrue(any('Recursive' in w for w in g.warnings))
 
+    def test_embed_style_inline_splices_page_embed_as_plain_siblings(self):
+        embed_uuid = '11111111-1111-4111-8111-000000000008'
+        self.nodes[8] = node('', embed_uuid, **{'block/page':1,'block/parent':1,'block/order':'a2','block/link':2,'block/refs':[2]})
+        self.nodes[9] = node('Security detail', '11111111-1111-4111-8111-000000000009', **{'block/page':2,'block/parent':2,'block/order':'a0'})
+        config = {**self.config, 'embed_style': 'inline'}
+        g = Garden(self.nodes, self.root, config)
+        content = g.page_content(1)
+        self.assertNotIn('page-embed', content)
+        self.assertNotIn('embed-title', content)
+        self.assertIn('Security detail', content)
+        self.assertNotIn('id="block-' + embed_uuid + '"', content)
+        ordinary_blocks = 2  # Parent, Child
+        embedded_page_blocks = 1  # Security detail
+        self.assertEqual(content.count('<li class="block'), ordinary_blocks + embedded_page_blocks)
+
     def test_missing_references_do_not_invent_titles(self):
         result = self.g.md.render('[[99999999-9999-4999-8999-999999999999]]')
         self.assertIn('Unavailable reference', result)
