@@ -474,7 +474,7 @@ class Garden:
             body = body.replace('loading="lazy"', 'loading="eager" fetchpriority="high"', 1)
         return body
 
-    def shell(self, title, body, url, css, js, *, home=False, description='', date='', extra_head=''):
+    def shell(self, title, body, url, css, js, *, home=False, description='', date='', extra_head='', theme_js=''):
         nav = []
         for label in self.config['navigation']:
             eid = self.resolve(label)
@@ -507,11 +507,11 @@ class Garden:
 <html lang="{escape(self.config.get('language', 'en'))}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>{document_title}</title><meta name="description" content="{desc}">
 <link rel="canonical" href="{escape(canonical, quote=True)}"><meta property="og:title" content="{escape(title, quote=True)}"><meta property="og:description" content="{desc}"><meta property="og:type" content="website"><meta property="og:url" content="{escape(canonical, quote=True)}">
-<link rel="icon" type="image/svg+xml" href="/site/logo-{logo_hash}.svg"><link rel="icon" type="image/png" sizes="512x512" href="/static/img/logo.png?v={logo_hash}"><link rel="apple-touch-icon" href="/static/img/logo.png?v={logo_hash}"><meta property="og:image" content="{escape(self.config.get('url', '').rstrip('/'), quote=True)}/static/img/logo.png"><link rel="stylesheet" href="{css}"><script src="{js}" defer></script>{extra_head}</head>
+<link rel="icon" type="image/svg+xml" href="/site/logo-{logo_hash}.svg"><link rel="icon" type="image/png" sizes="512x512" href="/static/img/logo.png?v={logo_hash}"><link rel="apple-touch-icon" href="/static/img/logo.png?v={logo_hash}"><meta property="og:image" content="{escape(self.config.get('url', '').rstrip('/'), quote=True)}/static/img/logo.png"><script src="{theme_js}"></script><link rel="stylesheet" href="{css}"><script src="{js}" defer></script>{extra_head}</head>
 <body><a class="skip" href="#content">Skip to content</a>
 <aside class="sidebar"><a class="brand" href="/"><img class="brand-logo" src="/site/logo-{logo_hash}.svg" width="38" height="38" alt=""><span>{site}<small>portfolio & digital garden</small></span></a>
 <details class="site-nav" open><summary>Explore</summary><nav aria-label="Main navigation"><a href="/">⌂ &nbsp; Home</a><a href="/pages/">▤ &nbsp; All pages</a><a href="/pages/#search">⌕ &nbsp; Search</a><a href="/graph/">◌ &nbsp; Graph view</a><p class="nav-label">PATHS THROUGH THE GARDEN</p>{''.join(nav)}</nav></details>
-<div class="sidebar-note"><span class="status-dot"></span> Always growing.<p>Notes, things I make,<br>and things I’m figuring out.</p></div></aside>
+<div class="sidebar-note"><span class="status-dot"></span> Always growing.<p>Notes, things I make,<br>and things I’m figuring out.</p></div><button type="button" class="theme-toggle" id="theme-toggle" aria-pressed="false"><span class="theme-toggle-icon" aria-hidden="true">☾</span><span class="theme-toggle-label">Dark</span></button></aside>
 <div class="workspace"><header class="topbar"><a href="/">{site}<span> / {('home' if home else 'garden')}</span></a><a href="/pages/#search" aria-label="Search the garden">⌕ <span>Find a note</span></a></header>
 <main id="content" class="{'graph-page' if url == '/graph/' else 'home' if home else 'note'}">{subtitle}<h1>{escape(title)}</h1>{meta}{body}</main>
 <footer>Made of curiosity. <a href="/licenses/">Licenses</a><a href="/pages/">Wander the garden ↗</a></footer></div>{mobile_nav}</body></html>'''
@@ -580,6 +580,8 @@ def build(source, output, config):
     js = (HERE / 'garden.js').read_text()
     css_url = '/site/garden-' + sha256(css.encode()).hexdigest()[:12] + '.css'
     js_url = '/site/garden-' + sha256(js.encode()).hexdigest()[:12] + '.js'
+    theme_js = (HERE / 'theme.js').read_text()
+    theme_js_url = '/site/garden-' + sha256(theme_js.encode()).hexdigest()[:12] + '.theme.js'
     documents, search = {}, []
     for eid, n in garden.pages.items():
         title = garden.label(eid)
@@ -587,14 +589,14 @@ def build(source, output, config):
         date = datetime.fromtimestamp(n['block/updated-at'] / 1000, timezone.utc).strftime('%d %b %Y') if n.get('block/updated-at') else ''
         text = ' '.join(garden.label(i) for i, b in entities.items() if b.get('block/page') == eid)
         description = re.sub(r'\s+', ' ', text).strip()[:170]
-        documents[garden.urls[eid]] = garden.shell(title, body, garden.urls[eid], css_url, js_url, home=eid == garden.home, description=description, date=date)
+        documents[garden.urls[eid]] = garden.shell(title, body, garden.urls[eid], css_url, js_url, home=eid == garden.home, description=description, date=date, theme_js=theme_js_url)
         search.append({'title':title, 'url':garden.urls[eid], 'text':text})
     expected = {i for i, b in entities.items() if b.get('block/page') in garden.pages and i not in garden.pages}
     missed = expected - garden.rendered_ids
     if missed:
         raise ValueError(f'{len(missed)} exported blocks have not been rendered: {sorted(missed)[:20]}')
     search_body = f'''<p class="intro">{len(garden.pages)} notes, connected by curiosity.</p><label class="search-label" for="search">Find a page</label><input type="search" id="search" placeholder="Search titles and notes…" autocomplete="off"><p id="search-status" class="muted" role="status">Browse all pages below. Type to search.</p><div id="search-results">{garden.page_list(garden.pages)}</div>'''
-    documents['/pages/'] = garden.shell('All pages', search_body, '/pages/', css_url, js_url)
+    documents['/pages/'] = garden.shell('All pages', search_body, '/pages/', css_url, js_url, theme_js=theme_js_url)
     graph = garden.graph_data()
     positioned = subprocess.run(['node', str(HERE / 'graph-layout.cjs')], input=json.dumps(graph),
                                 text=True, capture_output=True, check=True).stdout
@@ -616,7 +618,7 @@ def build(source, output, config):
 <aside id="graph-detail" class="graph-detail" aria-label="Selected page"><h2>Follow a connection</h2></aside></div>
 <noscript><p>Enable JavaScript to explore the interactive graph. You can still <a href="/pages/">browse all pages</a> and follow linked references in each note.</p></noscript>'''
     documents['/graph/'] = garden.shell('Graph view', graph_body, '/graph/', css_url, js_url,
-                                      extra_head=f'<link rel="stylesheet" href="{graph_files["css"][0]}"><script defer src="{graph_files["js"][0]}"></script>')
+                                      extra_head=f'<link rel="stylesheet" href="{graph_files["css"][0]}"><script defer src="{graph_files["js"][0]}"></script>', theme_js=theme_js_url)
     credits = '''<p>The static exporter and its original browser code are licensed under the
 <a href="/licenses/MIT.txt">MIT License</a>, copyright 2026 Arney Nova.
 Code highlighting includes Pygments stylesheet output under the
@@ -628,8 +630,8 @@ and <a href="/licenses/THIRD_PARTY_NOTICES.md">third-party notices and source li
 Publisher notices, when supplied, are listed separately below.</p>'''
     credits += '<ul>' + ''.join(f'<li><a href="/{quote(name, safe="/")}">{escape(name.removeprefix("licenses/"))}</a></li>'
                                for name in sorted(license_files)) + '</ul>'
-    documents['/licenses/'] = garden.shell('Licenses', credits, '/licenses/', css_url, js_url)
-    error_page = garden.shell('This path hasn’t grown yet.', '<p>This page may have moved. <a href="/pages/">Find it in the garden</a>.</p>', '/404.html', css_url, js_url)
+    documents['/licenses/'] = garden.shell('Licenses', credits, '/licenses/', css_url, js_url, theme_js=theme_js_url)
+    error_page = garden.shell('This path hasn’t grown yet.', '<p>This page may have moved. <a href="/pages/">Find it in the garden</a>.</p>', '/404.html', css_url, js_url, theme_js=theme_js_url)
     equations = render_math(garden)
     pattern = re.compile(r'<!--GARDEN_MATH_(\d+)-->')
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -643,6 +645,7 @@ Publisher notices, when supplied, are listed separately below.</p>'''
         (dest / 'site').mkdir()
         (dest / css_url.lstrip('/')).write_text(css, encoding='utf-8')
         (dest / js_url.lstrip('/')).write_text(js, encoding='utf-8')
+        (dest / theme_js_url.lstrip('/')).write_text(theme_js, encoding='utf-8')
         for name, content in graph_files.values():
             (dest / name.lstrip('/')).write_text(content, encoding='utf-8')
         for name, content in license_files.items():

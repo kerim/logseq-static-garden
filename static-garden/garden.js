@@ -1,6 +1,29 @@
 /*! Copyright (c) 2026 Arney Nova. MIT License; see /licenses/MIT.txt. */
 /* Optional enhancements. All page content and navigation are ordinary HTML. */
 (() => {
+  const themeToggle = document.getElementById('theme-toggle');
+  if (themeToggle) {
+    const icon = themeToggle.querySelector('.theme-toggle-icon');
+    const label = themeToggle.querySelector('.theme-toggle-label');
+    const isDark = () => (document.documentElement.getAttribute('data-theme')
+      ? document.documentElement.getAttribute('data-theme') === 'dark'
+      : matchMedia('(prefers-color-scheme: dark)').matches);
+    const render = () => {
+      const dark = isDark();
+      themeToggle.setAttribute('aria-pressed', String(dark));
+      themeToggle.setAttribute('aria-label', dark ? 'Switch to light theme' : 'Switch to dark theme');
+      if (icon) icon.textContent = dark ? '☀︎' : '☾';
+      if (label) label.textContent = dark ? 'Light' : 'Dark';
+    };
+    render();
+    themeToggle.addEventListener('click', () => {
+      const next = isDark() ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      try { localStorage.setItem('theme', next); } catch (error) {}
+      render();
+    });
+  }
+
   const explore = document.querySelector('.mobile-explore');
   if (explore) {
     document.addEventListener('click', event => {
