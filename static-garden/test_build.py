@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from build import Garden, read_entities, build
+from build import Garden, read_entities, build, strip_markdown
 from transit_reader import Reader, Tagged
 
 
@@ -207,6 +207,33 @@ class PublishingTests(unittest.TestCase):
         self.assertRegex(html, r'<header class="topbar"><nav class="crumbs"[^>]*>.*?</nav>')
         self.assertNotIn('/ garden</span>', html)
 
+    def test_home_page_title_has_no_suffix(self):
+        html = self.g.shell('Home', '<p>body</p>', '/', '/site/x.css', '/site/x.js', home=True)
+        self.assertIn('<title>My garden</title>', html)
+
+    def test_other_page_title_keeps_site_suffix(self):
+        html = self.g.shell('Security', '<p>body</p>', '/security/', '/site/x.css', '/site/x.js')
+        self.assertIn('<title>Security · My garden</title>', html)
+
+    def test_home_page_has_no_eyebrow(self):
+        html = self.g.shell('Home', '<p>body</p>', '/', '/site/x.css', '/site/x.js', home=True)
+        self.assertNotIn('class="eyebrow"', html)
+
+    def test_other_page_keeps_the_garden_eyebrow(self):
+        html = self.g.shell('Security', '<p>body</p>', '/security/', '/site/x.css', '/site/x.js')
+        self.assertIn('<p class="eyebrow"><a href="/pages/">THE GARDEN</a></p>', html)
+
+    def test_nav_label_defaults_to_topics(self):
+        html = self.g.shell('Home', '<p>body</p>', '/', '/site/x.css', '/site/x.js', home=True)
+        self.assertIn('<p class="nav-label">Topics</p>', html)
+
+    def test_nav_label_is_config_driven(self):
+        config = {**self.config, 'navigation_label': 'Paths'}
+        g = Garden(self.nodes, self.root, config)
+        html = g.shell('Home', '<p>body</p>', '/', '/site/x.css', '/site/x.js', home=True)
+        self.assertIn('<p class="nav-label">Paths</p>', html)
+        self.assertNotIn('Topics', html)
+
     def test_child_page_crumb_links_parent_and_leaves_child_unlinked(self):
         ids = self.ids + ['11111111-1111-4111-8111-' + f'{i:012d}' for i in range(8, 9)]
         nodes = {**self.nodes,
@@ -221,6 +248,31 @@ class PublishingTests(unittest.TestCase):
         self.assertIn('<li aria-current="page">Child Page</li>', html)
         self.assertRegex(html, r'<header class="topbar"><nav class="crumbs"[^>]*>.*?</nav>')
         self.assertNotIn('/ garden</span>', html)
+
+    def test_strip_markdown_converts_links_and_removes_double_brackets(self):
+        text = '[Triptych Newsletter](https://example.com/x) - [[3 fabulous]] links'
+        self.assertEqual(strip_markdown(text), 'Triptych Newsletter - 3 fabulous links')
+
+    def test_strip_markdown_collapses_whitespace(self):
+        self.assertEqual(strip_markdown('a\n\n  b   c'), 'a b c')
+
+    def test_home_page_description_uses_config_not_block_text(self):
+        # build() passes config['description'] for the home page regardless of block text.
+        html = self.g.shell('Home', '<p>body</p>', '/', '/site/x.css', '/site/x.js',
+                             home=True, description=self.config['description'])
+        self.assertIn('<meta name="description" content="Notes">', html)
+
+    def test_other_page_description_strips_markdown_links(self):
+        self.nodes[9] = node('[Triptych](https://example.com) - great',
+                              '11111111-1111-4111-8111-000000000009',
+                              **{'block/page': 2, 'block/parent': 2, 'block/order': 'a0'})
+        g = Garden(self.nodes, self.root, self.config)
+        text = ' '.join(g.label(i) for i, b in self.nodes.items() if b.get('block/page') == 2)
+        description = strip_markdown(text)[:170]
+        html = g.shell('Security', '<p>body</p>', '/security/', '/site/x.css', '/site/x.js',
+                        description=description)
+        self.assertIn('Triptych', html)
+        self.assertNotIn('](https://example.com)', html)
 
     def test_output_cannot_replace_source_or_unrelated_files(self):
         with self.assertRaises(ValueError):

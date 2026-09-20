@@ -124,6 +124,13 @@ def slugify(title):
     return re.sub(r'[^\w-]+', '-', title.casefold(), flags=re.UNICODE).strip('-')[:90] or 'page'
 
 
+def strip_markdown(text):
+    """Reduce markdown source to plain text for use in a meta description."""
+    text = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', text)
+    text = text.replace('[[', '').replace(']]', '')
+    return re.sub(r'\s+', ' ', text).strip()
+
+
 RESERVED_TOP_LEVEL_SLUGS = {'pages', 'graph', 'site', 'assets', 'licenses', 'downloads',
                             '404.html', 'robots.txt', 'sitemap.xml', '_headers'}
 
@@ -659,10 +666,10 @@ class Garden:
         site = escape(self.config['title'])
         canonical = self.config.get('url', '').rstrip('/') + url
         desc = escape(description or self.config['description'], quote=True)
-        subtitle = '<p class="eyebrow">A PERSONAL CORNER OF THE INTERNET</p>' if home else '<p class="eyebrow"><a href="/pages/">THE GARDEN</a></p>'
+        subtitle = '' if home else '<p class="eyebrow"><a href="/pages/">THE GARDEN</a></p>'
         meta = f'<p class="page-meta">Updated {escape(date)}</p>' if date else ''
         logo_hash = sha256((self.branding / 'logo.svg').read_bytes()).hexdigest()[:12]
-        document_title = site + ' · Portfolio & Garden' if home else escape(title) + ' · ' + site
+        document_title = site if home else escape(title) + ' · ' + site
         author = self.config.get('author')
         license_config = self.config.get('license')
         license_name, license_url = None, None
@@ -702,7 +709,7 @@ class Garden:
 <link rel="icon" type="image/svg+xml" href="/site/logo-{logo_hash}.svg"><link rel="icon" type="image/png" sizes="512x512" href="/static/img/logo.png?v={logo_hash}"><link rel="apple-touch-icon" href="/static/img/logo.png?v={logo_hash}"><meta property="og:image" content="{escape(self.config.get('url', '').rstrip('/'), quote=True)}/static/img/logo.png"><script src="{theme_js}"></script><link rel="stylesheet" href="{css}"><script src="{js}" defer></script>{extra_head}</head>
 <body><a class="skip" href="#content">Skip to content</a>
 <aside class="sidebar"><a class="brand" href="/"><span>{site}</span></a>
-<details class="site-nav" open><summary>Explore</summary><nav aria-label="Main navigation"><a href="/">⌂ &nbsp; Home</a><a href="/pages/">▤ &nbsp; All pages</a><a href="/pages/#search">⌕ &nbsp; Search</a><a href="/graph/">◌ &nbsp; Graph view</a><p class="nav-label">PATHS THROUGH THE GARDEN</p>{''.join(nav)}</nav></details>
+<details class="site-nav" open><summary>Explore</summary><nav aria-label="Main navigation"><a href="/">⌂ &nbsp; Home</a><a href="/pages/">▤ &nbsp; All pages</a><a href="/pages/#search">⌕ &nbsp; Search</a><a href="/graph/">◌ &nbsp; Graph view</a><p class="nav-label">{escape(self.config.get('navigation_label', 'Topics'))}</p>{''.join(nav)}</nav></details>
 {sidebar_note}<button type="button" class="theme-toggle" id="theme-toggle" aria-pressed="false"><span class="theme-toggle-icon" aria-hidden="true">☾</span><span class="theme-toggle-label">Dark</span></button></aside>
 <div class="workspace"><header class="topbar">{breadcrumb}<a href="/pages/#search" aria-label="Search the garden">⌕ <span>Find a note</span></a></header>
 <main id="content" class="{'graph-page' if url == '/graph/' else 'home' if home else 'note'}">{subtitle}<h1>{escape(title)}</h1>{meta}{body}</main>
@@ -780,7 +787,7 @@ def build(source, output, config):
         body = garden.page_content(eid)
         date = datetime.fromtimestamp(n['block/updated-at'] / 1000, timezone.utc).strftime('%d %b %Y') if n.get('block/updated-at') else ''
         text = ' '.join(garden.label(i) for i, b in entities.items() if b.get('block/page') == eid)
-        description = re.sub(r'\s+', ' ', text).strip()[:170]
+        description = config['description'] if eid == garden.home else strip_markdown(text)[:170]
         documents[garden.urls[eid]] = garden.shell(title, body, garden.urls[eid], css_url, js_url, home=eid == garden.home, description=description, date=date, theme_js=theme_js_url, crumbs=garden.crumbs(eid))
         search.append({'title':title, 'url':garden.urls[eid], 'text':text})
     expected = {i for i, b in entities.items() if b.get('block/page') in garden.pages and i not in garden.pages}
