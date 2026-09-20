@@ -231,6 +231,57 @@ class PublishingTests(unittest.TestCase):
             build(self.root, out, self.config)
         self.assertEqual((out/'precious.txt').read_text(), 'keep')
 
+    def test_default_url_style_still_uuid(self):
+        self.assertEqual(self.g.url_style, 'uuid')
+        self.assertEqual(self.g.urls[2], '/page/security--' + self.ids[1] + '/')
+
+
+class SectionUrlTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.ids = ['22222222-2222-4222-8222-' + f'{i:012d}' for i in range(1, 12)]
+        self.nodes = {
+            1: node('Home', self.ids[0], **{'block/name': 'home'}),
+            2: node('Security', self.ids[1], **{'block/name': 'security'}),
+            3: node('Taiwan', self.ids[2], **{'block/name': 'taiwan'}),
+            4: node('My Obsidian Setup', self.ids[3], **{'block/name': 'my obsidian setup'}),
+            5: node('', self.ids[4], **{'block/page': 2, 'block/parent': 2, 'block/order': 'a0', 'block/refs': [4]}),
+            6: node('Shared Page', self.ids[5], **{'block/name': 'shared page'}),
+            7: node('', self.ids[6], **{'block/page': 2, 'block/parent': 2, 'block/order': 'a1', 'block/refs': [6]}),
+            8: node('', self.ids[7], **{'block/page': 3, 'block/parent': 3, 'block/order': 'a0', 'block/refs': [6]}),
+            9: node('Solo', self.ids[8], **{'block/name': 'solo'}),
+            10: node('Same Title', self.ids[9], **{'block/name': 'same title a'}),
+            11: node('Same Title', self.ids[10], **{'block/name': 'same title b'})}
+        self.config = {'home_page': 'Home', 'title': 'My garden', 'navigation': ['Security', 'Taiwan'],
+                       'description': 'Notes', 'url_style': 'sections'}
+        self.g = Garden(self.nodes, self.root, self.config)
+
+    def test_navigation_page_gets_top_level_url(self):
+        self.assertEqual(self.g.urls[2], '/security/')
+        self.assertEqual(self.g.crumbs(2), [('Home', '/'), ('Security', None)])
+
+    def test_referenced_page_gets_nested_url_and_crumb(self):
+        self.assertEqual(self.g.urls[4], '/security/my-obsidian-setup/')
+        self.assertEqual(self.g.crumbs(4),
+                         [('Home', '/'), ('Security', '/security/'), ('My Obsidian Setup', None)])
+
+    def test_unreferenced_page_gets_top_level_url(self):
+        self.assertEqual(self.g.urls[9], '/solo/')
+        self.assertEqual(self.g.crumbs(9), [('Home', '/'), ('Solo', None)])
+
+    def test_precedence_first_navigation_entry_wins(self):
+        self.assertEqual(self.g.urls[6], '/security/shared-page/')
+        self.assertNotIn(6, [i for i in self.g.pages if self.g.sections.get(i) == 3])
+
+    def test_collision_falls_back_to_uuid_suffix_with_warning(self):
+        urls = {self.g.urls[10], self.g.urls[11]}
+        self.assertIn('/same-title/', urls)
+        fallback = next(u for u in urls if u != '/same-title/')
+        self.assertTrue(fallback.startswith('/same-title--'))
+        self.assertTrue(any('URL collision' in w for w in self.g.warnings))
+
 
 if __name__ == '__main__':
     unittest.main()

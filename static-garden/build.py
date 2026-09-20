@@ -120,6 +120,14 @@ def video_html(text):
             f'<figcaption><a href="{escape(watch, quote=True)}">Watch on YouTube ↗</a></figcaption></figure>')
 
 
+def slugify(title):
+    return re.sub(r'[^\w-]+', '-', title.casefold(), flags=re.UNICODE).strip('-')[:90] or 'page'
+
+
+RESERVED_TOP_LEVEL_SLUGS = {'pages', 'graph', 'site', 'assets', 'licenses', 'downloads',
+                            '404.html', 'robots.txt', 'sitemap.xml', '_headers'}
+
+
 def read_entities(db):
     entities = defaultdict(dict)
     many = {k for k, v in db['schema'].items() if isinstance(v, dict) and v.get('db/cardinality') == 'db.cardinality/many'}
@@ -160,11 +168,6 @@ class Garden:
         self.home = self.resolve(config['home_page'])
         if self.home not in self.pages:
             raise ValueError(f'Home page not found: {config["home_page"]}')
-        # UUID suffixes keep routes unambiguous when names or slugs collide.
-        self.urls = {}
-        for i, n in self.pages.items():
-            slug = re.sub(r'[^\w-]+', '-', n['block/title'].casefold(), flags=re.UNICODE).strip('-')[:90] or 'page'
-            self.urls[i] = '/' if i == self.home else '/page/' + quote(slug + '--' + n['block/uuid'], safe='-') + '/'
         self.property_entities = {n['db/ident']: n for n in entities.values() if 'db/ident' in n}
         self.children = defaultdict(list)
         for i, n in entities.items():
@@ -173,6 +176,16 @@ class Garden:
                 self.children[parent].append(i)
         for ids in self.children.values():
             ids.sort(key=lambda i: (entities[i].get('block/order', ''), i))
+        self.url_style = config.get('url_style', 'uuid')
+        self.nav_ids = [eid for eid in (self.resolve(label) for label in config.get('navigation', [])) if eid in self.pages]
+        self.sections = {}
+        if self.url_style == 'sections':
+            for nav_eid in self.nav_ids:
+                for target in self._section_targets(nav_eid):
+                    if target == self.home or target in self.nav_ids or target in self.sections:
+                        continue
+                    self.sections[target] = nav_eid
+        self.urls = self._build_urls()
         self.page_links = set()
         self.current_page = None
         self.backlinks = defaultdict(set)
@@ -217,6 +230,79 @@ class Garden:
         target = self.owner(eid)
         if self.current_page in self.pages and target in self.pages and self.current_page != target:
             self.page_links.add(tuple(sorted((self.current_page, target))))
+
+    def _section_targets(self, nav_eid):
+        """Pages a navigation page reaches via refs, embeds, or [[links]] at any depth."""
+        targets = set()
+        stack = list(self.children.get(nav_eid, ()))
+        while stack:
+            b = stack.pop()
+            n = self.entities[b]
+            stack.extend(self.children.get(b, ()))
+            for ref in values(n.get('block/refs')):
+                target = ref if ref in self.pages else self.owner(ref)
+                if target in self.pages:
+                    targets.add(target)
+            link = n.get('block/link')
+            if link is not None:
+                target = link if link in self.pages else self.owner(link)
+                if target in self.pages:
+                    targets.add(target)
+            for match in REF.finditer(n.get('block/title', '')):
+                resolved = self.resolve(match[1] or match[2])
+                target = resolved if resolved in self.pages else (self.owner(resolved) if resolved is not None else None)
+                if target in self.pages:
+                    targets.add(target)
+        targets.discard(nav_eid)
+        return targets
+
+    def _build_urls(self):
+        if self.url_style != 'sections':
+            urls = {}
+            for i, n in self.pages.items():
+                slug = slugify(n['block/title'])
+                urls[i] = '/' if i == self.home else '/page/' + quote(slug + '--' + n['block/uuid'], safe='-') + '/'
+            return urls
+        nav_index = {eid: idx for idx, eid in enumerate(self.nav_ids)}
+
+        def sort_key(i):
+            if i == self.home:
+                return (0, 0, '')
+            if i in nav_index:
+                return (1, nav_index[i], '')
+            if i in self.sections:
+                return (2, nav_index[self.sections[i]], self.pages[i]['block/title'].casefold())
+            return (3, 0, self.pages[i]['block/title'].casefold())
+
+        urls = {}
+        taken = set()
+        for i in sorted(self.pages, key=sort_key):
+            n = self.pages[i]
+            if i == self.home:
+                urls[i] = '/'
+                taken.add('/')
+                continue
+            slug = slugify(n['block/title'])
+            if i in nav_index:
+                path = '/' + quote(slug, safe='-') + '/'
+                collided = path in taken or slug in RESERVED_TOP_LEVEL_SLUGS
+                nested = None
+            elif i in self.sections:
+                section_slug = slugify(self.pages[self.sections[i]]['block/title'])
+                path = '/' + quote(section_slug, safe='-') + '/' + quote(slug, safe='-') + '/'
+                collided = path in taken
+                nested = section_slug
+            else:
+                path = '/' + quote(slug, safe='-') + '/'
+                collided = path in taken or slug in RESERVED_TOP_LEVEL_SLUGS
+                nested = None
+            if collided:
+                fallback_slug = quote(slug + '--' + n['block/uuid'], safe='-')
+                path = '/' + fallback_slug + '/' if nested is None else '/' + quote(nested, safe='-') + '/' + fallback_slug + '/'
+                self.warnings.add(f'URL collision resolved with UUID suffix: {path}')
+            taken.add(path)
+            urls[i] = path
+        return urls
 
     def graph_data(self):
         ids = sorted(self.pages, key=lambda i: (self.label(i).casefold(), i))
@@ -506,6 +592,11 @@ class Garden:
             return [(self.config['title'], None)]
         nav_ids = {self.resolve(label) for label in self.config['navigation']}
         if eid in nav_ids:
+            return [('Home', '/'), (self.label(eid), None)]
+        if self.url_style == 'sections':
+            section = self.sections.get(eid)
+            if section is not None:
+                return [('Home', '/'), (self.label(section), self.urls[section]), (self.label(eid), None)]
             return [('Home', '/'), (self.label(eid), None)]
         trail = []
         seen = set()

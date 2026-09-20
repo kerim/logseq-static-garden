@@ -141,11 +141,34 @@ unsupported links, and equation errors are also reported. Missing private target
 are never fetched; an exported property value may still expose its label without
 a corresponding public page body.
 
+## URL styles
+
+`site.json`'s `"url_style"` controls how page URLs and breadcrumbs are built. It defaults
+to `"uuid"`: every page (other than home) gets `/page/<slug>--<uuid>/`, and the breadcrumb
+walks `block/parent` ancestry.
+
+Setting `"url_style": "sections"` instead groups pages under the navigation entry that
+references them:
+
+- Each navigation page gets a bare top-level URL, e.g. `/technology/`.
+- A page is assigned to the first navigation page (in `navigation` order) whose blocks —
+  at any depth — reference it via `block/refs`, an embed's `block/link`, or a `[[link]]`
+  in a block's title. That page then gets `/<section-slug>/<page-slug>/`, and its
+  breadcrumb reads Home › Section › Page, with Section linked.
+- A page no navigation entry reaches gets `/<page-slug>/`, with a two-level breadcrumb
+  (Home › Page).
+- Slugs are lowercased, with runs of punctuation/whitespace collapsed to a single hyphen.
+- If two pages would resolve to the same URL, the first one (by navigation order, then
+  title) keeps it; the rest fall back to `/<slug>--<uuid>/`, with a build warning. The
+  same fallback applies if a top-level slug collides with a reserved path (`pages`,
+  `graph`, `site`, `assets`, `licenses`, `downloads`, `404.html`, `robots.txt`,
+  `sitemap.xml`, `_headers`).
+
 ## Project files
 
 | File | Purpose |
 | --- | --- |
-| `site.json` | Generic defaults; publishers normally supply `SOURCE/site.json`; optional `author`/`license` render as the sidebar license note (a known `license` name such as `"CC BY 4.0"` is linked) |
+| `site.json` | Generic defaults; publishers normally supply `SOURCE/site.json`; optional `author`/`license` render as the sidebar license note (a known `license` name such as `"CC BY 4.0"` is linked), optional `url_style` (see below) |
 | `build.py` / `transit_reader.py` | Decode the graph, render pages, copy attachments, emit headers |
 | `garden.css` / `garden.js` | Main layout, search, legacy bookmarks |
 | `graph-layout.cjs` / `graph.js` / `graph.css` | Graph layout and browser viewer |
