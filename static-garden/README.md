@@ -59,7 +59,7 @@ fails the build.
 | Search | Full-text JSON index fetched on the first query |
 | Old `#/page/` bookmarks | Small script resolves exported names and UUIDs to static routes |
 | Images, audio, video, PDFs | Referenced files copied; lazy images and media with `preload="none"` |
-| YouTube `{{video URL}}` blocks | Responsive, lazy-loaded player with a Watch on YouTube link |
+| `{{video URL}}` macros and `![](URL)` video links | YouTube and Vimeo players with a watch link, or a native video element for a direct video file |
 | Other attachments | Downloads with original filenames offered by the links |
 
 Page URLs include a UUID suffix to avoid slug collisions. Renaming a page changes
@@ -85,8 +85,8 @@ The generated `_headers` supplies a Content Security Policy with no inline scrip
 or eval allowance, blocks framing and object embeds, and sets `nosniff` and a
 referrer policy. Scripts, styles, and fetched data must come from the site itself;
 external images and audio/video must use HTTPS. Frames are allowed only from
-`https://www.youtube-nocookie.com` for the generated YouTube players. Raw HTML
-and arbitrary iframe embeds remain disabled.
+`https://www.youtube-nocookie.com` and `https://player.vimeo.com` for the generated
+players. Raw HTML and arbitrary iframe embeds remain disabled.
 
 Local attachments have two destinations:
 
@@ -113,20 +113,36 @@ export. It never opens the private Logseq database. This is not a secret scanner
 exported text, property labels, attachments, search data, and Git history can still
 contain information that was published accidentally.
 
-## YouTube videos
+## Videos
 
-A standalone Logseq video block renders as an embedded player:
+A Logseq video macro renders as an embedded player. It can be a block of its own, or
+sit on its own line or inside a sentence, in which case the paragraph is split around
+the player:
 
 ```text
 {{video https://youtu.be/0-zDFLbWK1Q}}
+{{video https://vimeo.com/76979871}}
+{{video https://example.com/talk.mp4}}
 ```
 
-YouTube watch, short, Shorts, live, and embed URLs are supported, including `t=`
-or `start=` timestamps. A Markdown link inside the macro also works. Players use
-YouTube's privacy-enhanced domain, load lazily, and do not autoplay. The player
-contacts YouTube when it loads; privacy-enhanced mode does not mean no external
-requests. Each embed includes a normal YouTube link for videos with playback or
-embedding restrictions. Unknown providers and invalid URLs stay readable source.
+Markdown image syntax that points at a video, such as `![](https://youtu.be/0-zDFLbWK1Q)`
+(common after an Obsidian import), renders the same way. Macros inside code blocks,
+code spans, quotes, and indented code stay source.
+
+- **YouTube.** Watch, short, Shorts, live, and embed URLs are supported, including `t=`
+  or `start=` timestamps. Players use YouTube's privacy-enhanced domain.
+- **Vimeo.** `vimeo.com/ID`, `player.vimeo.com/video/ID`, and unlisted-video hashes are
+  supported. Players use Vimeo's `dnt=1` option.
+- **Video files.** An `https://` URL ending in `.mp4`, `.webm`, `.ogg`, or `.mov`, or an
+  attachment referenced with image syntax, renders a native `<video controls>` element
+  with `preload="none"`.
+
+Frame sources are built from a fixed provider host plus an ID validated by the
+builder; the URL in the graph is never placed in a frame. Players load lazily and do not
+autoplay. A player contacts its provider when it loads; the privacy-enhanced modes do not
+mean no external requests. Each embed includes a normal watch link for videos with
+playback or embedding restrictions. Unknown providers and invalid URLs stay readable
+source and produce a warning.
 
 ## Format limits
 

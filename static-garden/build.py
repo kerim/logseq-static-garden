@@ -32,7 +32,7 @@ LICENSE_URLS = {'CC BY 4.0': 'https://creativecommons.org/licenses/by/4.0/'}
 INLINE_ASSETS = {'.png', '.jpg', '.jpeg', '.webp', '.gif', '.avif', '.ico',
                  '.mp3', '.ogg', '.wav', '.m4a', '.flac', '.mp4', '.webm', '.mov', '.pdf'}
 HEADERS = """/*
-  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' https: data:; font-src 'self'; connect-src 'self'; media-src 'self' https:; frame-src https://www.youtube-nocookie.com; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' https: data:; font-src 'self'; connect-src 'self'; media-src 'self' https:; frame-src https://www.youtube-nocookie.com https://player.vimeo.com; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
   X-Frame-Options: DENY
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
@@ -73,25 +73,30 @@ def values(value):
     return value if isinstance(value, list) else ([] if value is None else [value])
 
 
-def video_html(text):
-    """Render standalone YouTube macros from validated IDs, never arbitrary HTML."""
-    macro = re.fullmatch(r'\s*\{\{video\s+(.+?)\}\}\s*', text)
-    if not macro:
-        return None
-    raw = macro[1].strip()
-    # Logseq accepts plain URLs; also accept a Markdown link as the argument.
+VIDEO_FILE = re.compile(r'\.(?:mp4|webm|ogg|mov)', re.I)
+VIDEO_MACRO = re.compile(r'(`+).+?\1|\{\{video\s+[^{}]+?\}\}')  # a code span (skipped) or a video macro
+FENCE = re.compile(r'[ ]{0,3}(`{3,}|~{3,})(.*)')
+
+
+def video_argument(raw):
+    """Unwrap a video macro argument: a plain URL, <URL>, or a Markdown link."""
+    raw = raw.strip()
     markdown_link = re.fullmatch(r'\[[^\]\n]*\]\(([^\s()]+)\)', raw)
     if markdown_link:
-        raw = markdown_link[1]
-    elif raw.startswith('<') and raw.endswith('>'):
-        raw = raw[1:-1]
-    try:
-        parts = urlsplit(unescape(raw))
-    except ValueError:
-        return None
+        return markdown_link[1]
+    if raw.startswith('<') and raw.endswith('>'):
+        return raw[1:-1]
+    return raw
+
+
+def video_figure(frame, caption):
+    return f'<figure class="video-embed">{frame}<figcaption>{caption}</figcaption></figure>'
+
+
+def youtube_embed(parts, title):
     hosts = {'youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com',
              'youtube-nocookie.com', 'www.youtube-nocookie.com', 'youtu.be', 'www.youtu.be'}
-    if parts.scheme not in ('http', 'https') or parts.netloc.lower() not in hosts:
+    if parts.netloc.lower() not in hosts:
         return None
     query = parse_qs(parts.query)
     if parts.netloc.lower() in ('youtu.be', 'www.youtu.be'):
@@ -113,11 +118,92 @@ def video_html(text):
     start = min(start, 2147483647)
     src = f'https://www.youtube-nocookie.com/embed/{video_id}?playsinline=1' + (f'&start={start}' if start else '')
     watch = f'https://www.youtube.com/watch?v={video_id}' + (f'&t={start}s' if start else '')
-    return (f'<figure class="video-embed"><iframe src="{escape(src, quote=True)}" '
-            'title="YouTube video player" width="560" height="315" loading="lazy" '
-            'referrerpolicy="strict-origin-when-cross-origin" '
-            'allow="encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe>'
-            f'<figcaption><a href="{escape(watch, quote=True)}">Watch on YouTube ↗</a></figcaption></figure>')
+    return video_figure(
+        f'<iframe src="{escape(src, quote=True)}" title="{escape(title or "YouTube video player", quote=True)}" '
+        'width="560" height="315" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" '
+        'allow="encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe>',
+        f'<a href="{escape(watch, quote=True)}">Watch on YouTube ↗</a>')
+
+
+def vimeo_embed(parts, title):
+    host, query = parts.netloc.lower(), parse_qs(parts.query)
+    if host in ('vimeo.com', 'www.vimeo.com'):
+        # vimeo.com/ID, or vimeo.com/ID/HASH for an unlisted video.
+        path = re.fullmatch(r'/(\d{1,12})(?:/([0-9a-f]{6,16}))?/?', parts.path)
+        video_id, key = (path[1], path[2]) if path else ('', None)
+    elif host == 'player.vimeo.com':
+        path = re.fullmatch(r'/video/(\d{1,12})/?', parts.path)
+        video_id, key = (path[1], query.get('h', [''])[0]) if path else ('', None)
+    else:
+        return None
+    if not video_id or (key and not re.fullmatch(r'[0-9a-f]{6,16}', key)):
+        return None
+    src = f'https://player.vimeo.com/video/{video_id}?' + (f'h={key}&' if key else '') + 'dnt=1'
+    watch = f'https://vimeo.com/{video_id}' + (f'/{key}' if key else '')
+    return video_figure(
+        f'<iframe src="{escape(src, quote=True)}" title="{escape(title or "Vimeo video player", quote=True)}" '
+        'width="560" height="315" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" '
+        'allow="picture-in-picture; fullscreen" allowfullscreen></iframe>',
+        f'<a href="{escape(watch, quote=True)}">Watch on Vimeo ↗</a>')
+
+
+def video_embed(url, title='', local=False):
+    """Embed a YouTube or Vimeo player, or a direct video file. Iframe sources are built from a fixed
+    host plus an ID validated here; the graph's URL itself is never placed in a frame. `local` also
+    accepts a site-relative attachment path (an already-resolved `/assets/...` link)."""
+    try:
+        parts = urlsplit(unescape(url))
+    except ValueError:
+        return None
+    if parts.scheme in ('http', 'https'):
+        embed = youtube_embed(parts, title) or vimeo_embed(parts, title)
+        if embed:
+            return embed
+    if VIDEO_FILE.fullmatch(Path(parts.path).suffix) and (
+            parts.scheme == 'https' and parts.netloc or (local and not parts.scheme and url.startswith('/'))):
+        return (f'<figure class="video-embed"><video controls playsinline preload="none" '
+                f'src="{escape(url, quote=True)}"></video></figure>')
+    return None
+
+
+def video_html(text):
+    """Render a block that is only a video macro, never arbitrary HTML."""
+    macro = re.fullmatch(r'\s*\{\{video\s+([^{}]+?)\}\}\s*', text)
+    return video_embed(video_argument(macro[1])) if macro else None
+
+
+def video_segments(text):
+    """Split block text into Markdown chunks and the video macros found outside code: fenced blocks,
+    code spans, quotes and indented code stay source. A macro inside a sentence splits its paragraph
+    around the player. Returns None when the block has no embeddable video macro."""
+    whole = video_html(text)
+    if whole is not None:
+        return [('video', whole)]
+    segments, chunk, fence, found = [], [], None, False
+    def flush():
+        if any(line.strip() for line in chunk):
+            segments.append(('markdown', '\n'.join(chunk)))
+        chunk.clear()
+    for line in text.split('\n'):
+        marker = FENCE.fullmatch(line)
+        if marker:
+            if fence is None:
+                fence = marker[1]
+            elif marker[1][0] == fence[0] and len(marker[1]) >= len(fence) and not marker[2].strip():
+                fence = None
+        elif fence is None and not line.startswith(('>', '    ', '\t')):
+            pos = 0
+            for macro in VIDEO_MACRO.finditer(line):
+                html = None if macro[1] else video_html(macro[0])
+                if html is not None:
+                    chunk.append(line[pos:macro.start()])
+                    flush()
+                    segments.append(('video', html))
+                    found, pos = True, macro.end()
+            line = line[pos:]
+        chunk.append(line)
+    flush()
+    return segments if found else None
 
 
 def slugify(title):
@@ -466,7 +552,7 @@ class Garden:
             self.assets.add(path)
         else:
             self.warnings.add(f'Missing asset: {path}')
-        return '/' + quote(published_asset_path(path).as_posix(), safe='/') + (('#' + urlsplit(raw).fragment) if urlsplit(raw).fragment else '')
+        return self.href('/' + quote(published_asset_path(path).as_posix(), safe='/')) + (('#' + urlsplit(raw).fragment) if urlsplit(raw).fragment else '')
 
     def is_external(self, href):
         parts = urlsplit(href)
@@ -511,6 +597,9 @@ class Garden:
         token = tokens[idx]
         src = self.link_url(token.attrGet('src') or '')
         alt = token.content
+        video = video_embed(src, alt, local=True)
+        if video is not None:
+            return video
         if download_name(src) is not None:
             return f'<a class="attachment" href="{escape(src, quote=True)}"{download_attribute(src)}>{escape(alt or download_name(src))}</a>'
         return f'<img src="{escape(src, quote=True)}" alt="{escape(alt, quote=True)}" loading="lazy" decoding="async">'
@@ -578,8 +667,9 @@ class Garden:
         self.rendered_ids.add(eid)
         text = n.get('block/title', '')
         display = n.get('logseq.property.node/display-type')
-        video = video_html(text) if display not in ('code', 'math') and 'logseq.property.asset/type' not in n else None
-        if video is None and ('{{' in text or re.search(r'^#\+BEGIN_(?:QUERY|SRC)', text, re.I | re.M)):
+        segments = video_segments(text) if display not in ('code', 'math') and 'logseq.property.asset/type' not in n else None
+        remaining = '\n'.join(part for kind, part in segments if kind == 'markdown') if segments else text
+        if '{{' in remaining or re.search(r'^#\+BEGIN_(?:QUERY|SRC)', remaining, re.I | re.M):
             self.warnings.add(f'Macro/query retained as source: {n["block/uuid"]}')
         if 'logseq.property.asset/type' in n:
             body = self.asset_html(eid)
@@ -588,9 +678,9 @@ class Garden:
         elif display == 'math':
             body = '<div class="math-block">' + self.math_html(text, {'display_mode': True}) + '</div>'
         else:
-            body = video if video is not None else self.md.render(text)
+            body = ''.join(part if kind == 'video' else self.md.render(part) for kind, part in segments) if segments else self.md.render(text)
             heading = n.get('logseq.property/heading')
-            if heading and video is None:
+            if heading and segments is None:
                 level = max(2, min(6, int(heading)))
                 body = f'<h{level}>' + self.md.renderInline(text) + f'</h{level}>'
             if display == 'quote':

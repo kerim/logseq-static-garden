@@ -24,6 +24,7 @@
 
 .video-embed{margin:12px 0}
 .video-embed iframe{display:block;width:100%;height:auto;aspect-ratio:16/9;min-height:200px;border:0;border-radius:8px;background:#111}
+.video-embed video{display:block;width:100%;height:auto;max-height:80vh;border-radius:8px;background:#111}
 .video-embed figcaption{margin-top:6px;font-size:12px}
 
 /* External-link indicator: a small arrow-out-of-box after off-site links. */

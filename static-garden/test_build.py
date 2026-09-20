@@ -335,6 +335,15 @@ class PublishingTests(unittest.TestCase):
                                      f'{attr}="{value}" is absolute but not under base_path /x')
         self.assertIn('data-base="/x"', html)
 
+    def test_base_path_prefixes_attachment_links(self):
+        (self.root / 'assets').mkdir()
+        for name in ('photo.png', 'clip.mp4'):
+            (self.root / 'assets' / name).write_bytes(b'x')
+        g = Garden(self.nodes, self.root, {**self.config, 'base_path': '/x'})
+        self.assertIn('src="/x/assets/photo.png"', g.md.render('![](../assets/photo.png)'))
+        self.assertIn('src="/x/assets/clip.mp4"', g.md.render('![](../assets/clip.mp4)'))
+        self.assertEqual(self.g.link_url('../assets/photo.png'), '/assets/photo.png')
+
     def test_base_path_prefixes_route_and_search_json_values(self):
         config = {**self.config, 'base_path': '/x'}
         g = Garden(self.nodes, self.root, config)
