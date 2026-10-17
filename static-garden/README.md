@@ -189,6 +189,15 @@ blocks with no page reference are skipped). The navigation page itself is never
 published. If it's missing from the export or yields no pages, the build falls back to
 `"navigation"` and logs a warning.
 
+## Hiding properties
+
+Setting `"hidden_properties_page"` to a page title (e.g. `"Hidden Properties"`)
+hides every property that page links to, via `[[Property name]]` in any of its
+blocks. A hidden property's values are left off every page and block, and the
+property's own page is not published. The list page itself is never published.
+If the page is missing from the export or links to no properties, every property
+is shown and the build logs a warning.
+
 ## Serving several sites from one builder
 
 Three `site.json` options let one exporter build several distinct sites:
@@ -223,7 +232,7 @@ Three `site.json` options let one exporter build several distinct sites:
 
 | File | Purpose |
 | --- | --- |
-| `site.json` | Generic defaults; publishers normally supply `SOURCE/site.json`; optional `author`/`license` render as the sidebar license note (a known `license` name such as `"CC BY 4.0"` is linked), optional `url_style` (see below), optional `theme_css`/`base_path`/`exclude_pages` (see "Serving several sites from one builder") |
+| `site.json` | Generic defaults; publishers normally supply `SOURCE/site.json`; optional `author`/`license` render as the sidebar license note (a known `license` name such as `"CC BY 4.0"` is linked), optional `url_style` (see below), optional `theme_css`/`base_path`/`exclude_pages` (see "Serving several sites from one builder"), optional `hidden_properties_page` (see "Hiding properties") |
 | `build.py` / `transit_reader.py` | Decode the graph, render pages, copy attachments, emit headers |
 | `garden.css` / `garden.js` | Main layout, search, legacy bookmarks |
 | `graph-layout.cjs` / `graph.js` / `graph.css` | Graph layout and browser viewer |

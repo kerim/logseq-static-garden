@@ -102,6 +102,41 @@ class PublishingTests(unittest.TestCase):
         self.assertNotIn(1, g.backlinks[5])
         self.assertFalse({22, 23, 24} & set(g.entities))
 
+    def _with_properties(self):
+        uid = lambda i: '11111111-1111-4111-8111-%012d' % i
+        self.nodes[30] = node('FAQ Status', uid(30), **{'block/name':'faq status','db/ident':'user.property/faq-status','db/valueType':'db.type/string'})
+        self.nodes[31] = node('Source', uid(31), **{'block/name':'source','db/ident':'user.property/source','db/valueType':'db.type/string'})
+        self.nodes[5]['user.property/faq-status'] = 'Draft'
+        self.nodes[5]['user.property/source'] = 'Manual'
+        self.nodes[32] = node('Hidden Properties', uid(32), **{'block/name':'hidden properties'})
+        self.nodes[33] = node('[[FAQ Status]]', uid(33), **{'block/page':32,'block/parent':32,'block/order':'a0','block/refs':[30]})
+
+    def test_hidden_properties_page_hides_listed_properties(self):
+        self._with_properties()
+        g = Garden(self.nodes, self.root, {**self.config, 'hidden_properties_page':'Hidden Properties'})
+        content = g.page_content(5)
+        self.assertNotIn('Draft', content)
+        self.assertNotIn('FAQ Status', content)
+        self.assertIn('Manual', content)
+        self.assertNotIn(30, g.pages)
+        self.assertNotIn(32, g.pages)
+        self.assertIn(31, g.pages)
+        self.assertFalse(g.warnings)
+
+    def test_properties_all_shown_without_hidden_properties_page(self):
+        self._with_properties()
+        g = Garden(self.nodes, self.root, self.config)
+        content = g.page_content(5)
+        self.assertIn('Draft', content)
+        self.assertIn('Manual', content)
+        self.assertIn(32, g.pages)
+
+    def test_missing_hidden_properties_page_warns_and_shows_all(self):
+        self._with_properties()
+        g = Garden(self.nodes, self.root, {**self.config, 'hidden_properties_page':'Nope'})
+        self.assertIn('Draft', g.page_content(5))
+        self.assertTrue(any('hidden_properties_page' in w for w in g.warnings))
+
     def test_shell_has_no_footer(self):
         html = self.g.shell('Home', '', '/', '/a.css', '/a.js', theme_js='/t.js')
         self.assertNotIn('<footer', html)

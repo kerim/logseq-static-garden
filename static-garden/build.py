@@ -299,6 +299,27 @@ class Garden:
                 self.children[parent].append(i)
         for ids in self.children.values():
             ids.sort(key=lambda i: (entities[i].get('block/order', ''), i))
+        self.hidden_properties = set()
+        hidden_page_title = config.get('hidden_properties_page')
+        if hidden_page_title:
+            hidden_page = self.resolve(hidden_page_title)
+            if hidden_page in self.pages:
+                for node in (n for n in entities.values() if n.get('block/page') == hidden_page):
+                    targets = set(values(node.get('block/refs')))
+                    targets |= {self.resolve(m[1] or m[2]) for m in REF.finditer(node.get('block/title', ''))}
+                    for target in targets:
+                        ident = str(entities.get(target, {}).get('db/ident', ''))
+                        if ident.startswith('user.property/'):
+                            self.hidden_properties.add(ident)
+                # The list page and each hidden property's own page are never published.
+                hidden_pages = [hidden_page] + [i for i, n in self.pages.items() if n.get('db/ident') in self.hidden_properties]
+                for eid in hidden_pages:
+                    for key, val in list(self.names.items()):
+                        if val == eid:
+                            del self.names[key]
+                    del self.pages[eid]
+            if not self.hidden_properties:
+                self.warnings.add(f"hidden_properties_page '{hidden_page_title}' not found or lists no properties; showing all properties")
         self.url_style = config.get('url_style', 'uuid')
         nav_page_title = config.get('navigation_page')
         self.nav_ids = None
@@ -650,6 +671,8 @@ class Garden:
     def properties(self, n):
         props = []
         for key, value in n.items():
+            if key in self.hidden_properties:
+                continue
             if not key.startswith('user.property/') and key not in ('logseq.property/status', 'logseq.property/priority', 'logseq.property/deadline', 'logseq.property/scheduled'):
                 continue
             prop = self.property_entities.get(key, {})
