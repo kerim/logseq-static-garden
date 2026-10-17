@@ -233,6 +233,19 @@ def read_entities(db):
     return dict(entities)
 
 
+def drop_comments(entities):
+    """Drop Logseq comment threads (blocks tagged Comments/Comment) and everything under them."""
+    classes = {i for i, n in entities.items() if n.get('db/ident') in ('logseq.class/Comments', 'logseq.class/Comment')}
+    hidden = {i for i, n in entities.items() if classes & set(values(n.get('block/tags')))}
+    changed = bool(hidden)
+    while changed:
+        before = len(hidden)
+        hidden |= {i for i, n in entities.items() if n.get('block/parent') in hidden}
+        changed = len(hidden) != before
+    for i in hidden:
+        del entities[i]
+
+
 def normalize_base_path(raw):
     """Ensure a leading slash and strip any trailing slash; '' stays ''."""
     raw = (raw or '').strip()
@@ -243,6 +256,7 @@ def normalize_base_path(raw):
 
 class Garden:
     def __init__(self, entities, source, config):
+        drop_comments(entities)
         self.entities, self.source, self.config = entities, source, config
         self.branding = source / 'branding' if (source / 'branding').exists() else HERE / 'branding'
         for name in ('logo.svg', 'logo.png'):
@@ -865,7 +879,7 @@ class Garden:
 {sidebar_note}<button type="button" class="theme-toggle" id="theme-toggle" aria-pressed="false"><span class="theme-toggle-icon" aria-hidden="true">☾</span><span class="theme-toggle-label">Dark</span></button></aside>
 <div class="workspace"><header class="topbar">{breadcrumb}<a href="{escape(self.href('/pages/#search'))}" aria-label="Search the garden">⌕ <span>Find a note</span></a></header>
 <main id="content" class="{'graph-page' if url == '/graph/' else 'home' if home else 'note'}">{subtitle}<h1>{escape(title)}</h1>{meta}{body}</main>
-<footer>Made of curiosity. <a href="{escape(self.href('/licenses/'))}">Licenses</a><a href="{escape(self.href('/pages/'))}">Wander the garden ↗</a></footer></div>{mobile_nav}</body></html>'''
+</div>{mobile_nav}</body></html>'''
 
 
 def load_base_css(config):

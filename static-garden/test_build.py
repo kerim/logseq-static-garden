@@ -85,6 +85,28 @@ class PublishingTests(unittest.TestCase):
         self.assertEqual(self.g.url(7), '/assets/' + asset + '#page=8')
         self.assertIn('assets/' + asset, self.g.assets)
 
+    def test_comment_threads_are_not_published(self):
+        # Logseq stores a comment thread as a block tagged Comments under the commented block,
+        # holding one block tagged Comment per comment.
+        uid = lambda i: '11111111-1111-4111-8111-%012d' % i
+        self.nodes[20] = {'db/ident': 'logseq.class/Comments', 'block/uuid': uid(20), 'block/title': 'Comments'}
+        self.nodes[21] = {'db/ident': 'logseq.class/Comment', 'block/uuid': uid(21), 'block/title': 'Comment'}
+        self.nodes[22] = node('Comments', uid(22), **{'block/page':1,'block/parent':4,'block/order':'a0V','block/tags':[20],'logseq.property.comments/blocks':[4]})
+        self.nodes[23] = node('Private remark about [[Notes]]', uid(23), **{'block/page':1,'block/parent':22,'block/order':'a0','block/tags':[21],'block/refs':[5]})
+        self.nodes[24] = node('Reply', uid(24), **{'block/page':1,'block/parent':23,'block/order':'a0'})
+        g = Garden(self.nodes, self.root, self.config)
+        content = g.page_content(1)
+        self.assertIn('Child', content)
+        self.assertNotIn('Private remark', content)
+        self.assertNotIn('Reply', content)
+        self.assertNotIn(1, g.backlinks[5])
+        self.assertFalse({22, 23, 24} & set(g.entities))
+
+    def test_shell_has_no_footer(self):
+        html = self.g.shell('Home', '', '/', '/a.css', '/a.js', theme_js='/t.js')
+        self.assertNotIn('<footer', html)
+        self.assertNotIn('Made of curiosity', html)
+
     def test_page_and_block_embeds_render_linked_content(self):
         # DB graphs store {{embed}} as an empty block whose block/link points at a page or block.
         self.nodes[8] = node('', '11111111-1111-4111-8111-000000000008', **{'block/page':1,'block/parent':1,'block/order':'a2','block/link':2,'block/refs':[2]})
