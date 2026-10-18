@@ -949,7 +949,6 @@ class Garden:
         site = escape(self.config['title'])
         canonical = self.config.get('url', '').rstrip('/') + self.href(url)
         desc = escape(description or self.config['description'], quote=True)
-        subtitle = '' if home else f'<p class="eyebrow"><a href="{escape(self.href("/pages/"))}">THE GARDEN</a></p>'
         meta = f'<p class="page-meta">Updated {escape(date)}</p>' if date else ''
         logo_hash = sha256((self.branding / 'logo.svg').read_bytes()).hexdigest()[:12]
         document_title = site if home else escape(title) + ' · ' + site
@@ -996,7 +995,7 @@ class Garden:
 <details class="site-nav" open><summary>Explore</summary><nav aria-label="Main navigation"><a href="{escape(self.href('/'))}">⌂ &nbsp; Home</a><a href="{escape(self.href('/pages/'))}">▤ &nbsp; All pages</a><a href="{escape(self.href('/pages/#search'))}">⌕ &nbsp; Search</a><a href="{escape(self.href('/graph/'))}">◌ &nbsp; Graph view</a><p class="nav-label">{escape(self.config.get('navigation_label', 'Topics'))}</p>{''.join(nav)}</nav></details>
 {sidebar_note}<button type="button" class="theme-toggle" id="theme-toggle" aria-pressed="false"><span class="theme-toggle-icon" aria-hidden="true">☾</span><span class="theme-toggle-label">Dark</span></button></aside>
 <div class="workspace"><header class="topbar">{breadcrumb}<a href="{escape(self.href('/pages/#search'))}" aria-label="Search the garden">⌕ <span>Find a note</span></a></header>
-<main id="content" class="{'graph-page' if url == '/graph/' else 'home' if home else 'note'}">{subtitle}<h1>{escape(title)}</h1>{meta}{body}</main>
+<main id="content" class="{'graph-page' if url == '/graph/' else 'home' if home else 'note'}"><h1>{escape(title)}</h1>{meta}{body}</main>
 </div>{mobile_nav}</body></html>'''
 
 

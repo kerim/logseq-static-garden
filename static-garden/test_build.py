@@ -273,13 +273,14 @@ class PublishingTests(unittest.TestCase):
         html = self.g.shell('Security', '<p>body</p>', '/security/', '/site/x.css', '/site/x.js')
         self.assertIn('<title>Security · My garden</title>', html)
 
-    def test_home_page_has_no_eyebrow(self):
-        html = self.g.shell('Home', '<p>body</p>', '/', '/site/x.css', '/site/x.js', home=True)
-        self.assertNotIn('class="eyebrow"', html)
-
-    def test_other_page_keeps_the_garden_eyebrow(self):
-        html = self.g.shell('Security', '<p>body</p>', '/security/', '/site/x.css', '/site/x.js')
-        self.assertIn('<p class="eyebrow"><a href="/pages/">THE GARDEN</a></p>', html)
+    def test_no_page_has_a_garden_label_above_its_title(self):
+        # The breadcrumb and the site title already say where you are.
+        for home in (True, False):
+            with self.subTest(home=home):
+                html = self.g.shell('Security', '<p>body</p>', '/security/', '/site/x.css', '/site/x.js', home=home)
+                self.assertNotIn('eyebrow', html)
+                self.assertNotIn('THE GARDEN', html)
+                self.assertIn('<h1>Security</h1>', html)
 
     def test_nav_label_defaults_to_topics(self):
         html = self.g.shell('Home', '<p>body</p>', '/', '/site/x.css', '/site/x.js', home=True)
