@@ -255,6 +255,12 @@ ol.root-outline{padding-left:22px}
 .block.numbered>details>summary:before{left:-36px}
 '''
 
+# Logseq's block background colors, as see-through tints that suit light and dark themes.
+BLOCK_COLORS = {'yellow': '234,179,8', 'red': '239,68,68', 'pink': '236,72,153', 'green': '34,197,94',
+                'blue': '59,130,246', 'purple': '168,85,247', 'gray': '128,128,128'}
+COLOR_CSS = '\n.block-body.has-bg{padding:6px 12px;border-radius:6px}\n' + ''.join(
+    f'.block-body.bg-{name}{{background:rgba({rgb},.2)}}\n' for name, rgb in BLOCK_COLORS.items())
+
 RESERVED_TOP_LEVEL_SLUGS = {'pages', 'graph', 'site', 'assets', 'licenses', 'downloads',
                             '404.html', 'robots.txt', 'sitemap.xml', '_headers'}
 
@@ -330,10 +336,13 @@ class Garden:
         if self.home not in self.pages:
             raise ValueError(f'Home page not found: {config["home_page"]}')
         self.property_entities = {n['db/ident']: n for n in entities.values() if 'db/ident' in n}
+        # A block that only holds a property's value (Logseq keeps a block's background
+        # color, for one, as a child block named "green") is not content.
+        self.property_values = {i for i, n in entities.items() if 'logseq.property/created-from-property' in n}
         self.children = defaultdict(list)
         for i, n in entities.items():
             parent = n.get('block/parent')
-            if parent is not None and i not in self.pages:
+            if parent is not None and i not in self.pages and i not in self.property_values:
                 self.children[parent].append(i)
         for ids in self.children.values():
             ids.sort(key=lambda i: (entities[i].get('block/order', ''), i))
@@ -586,11 +595,17 @@ class Garden:
         if match:
             target = match[1] or match[2]
         else:
-            # Logseq permits spaces in page destinations, unlike CommonMark.
-            match = re.match(r'\[([^\]\n]+)\]\(([^)\n]+)\)', rest)
-            if not match or self.resolve(match[2]) is None:
+            # [alias](Page), [alias]([[Page]]) and [alias](((block))). Logseq permits spaces in
+            # page destinations, unlike CommonMark. A bracketed target that is not published
+            # still becomes a reference (shown as plain text) rather than a broken link.
+            match = re.match(r'\[([^\]\n]+)\]\((?:\[\[([^\]\n]+)\]\]|\(\(([^)\n]+)\)\)|([^)\n]+))\)', rest)
+            if not match:
                 return False
-            label, target = match[1], match[2]
+            label, target = match[1], match[2] or match[3]
+            if target is None:
+                if self.resolve(match[4]) is None:
+                    return False
+                target = match[4]
         if not silent:
             token = state.push('logseq_ref', '', 0)
             token.meta = {'target': target, 'label': label}
@@ -737,6 +752,14 @@ class Garden:
             props.append(f'<dt>{label}</dt><dd>{", ".join(items)}</dd>')
         return '<dl class="properties">' + ''.join(props) + '</dl>' if props else ''
 
+    def block_color(self, n):
+        """Name of the block's background color, when it is one Logseq offers."""
+        for value in values(n.get('logseq.property/background-color')):
+            name = str(self.entities.get(value, {}).get('block/title', '')).strip().casefold()
+            if name in BLOCK_COLORS:
+                return name
+        return None
+
     def is_numbered(self, eid):
         """True for a block that Logseq shows as an item of a numbered list."""
         value = self.entities.get(eid, {}).get('logseq.property/order-list-type')
@@ -821,6 +844,8 @@ class Garden:
         body += self.properties(n)
         children = self.children[eid]
         nested = self.outline(self.blocks(children, (*ancestors, eid))) if children else ''
+        color = self.block_color(n)
+        body_class = 'block-body' + (f' has-bg bg-{color}' if color else '')
         anchor = 'block-' + n['block/uuid']
         if marker is None:
             permalink = f'<a class="bullet" href="#{anchor}" aria-label="Link to this block">•</a>'
@@ -829,9 +854,9 @@ class Garden:
                          f'aria-label="Link to this block, item {marker}">{marker}.</a>')
         if children:
             opened = '' if n.get('block/collapsed?') else ' open'
-            content = f'<details{opened}><summary><div class="block-body">{body}</div></summary>{nested}</details>'
+            content = f'<details{opened}><summary><div class="{body_class}">{body}</div></summary>{nested}</details>'
         else:
-            content = '<div class="block-body">' + body + '</div>'
+            content = f'<div class="{body_class}">' + body + '</div>'
         classes = 'block' if marker is None else 'block numbered'
         return f'<li class="{classes}" id="{anchor}">{permalink}{content}</li>'
 
@@ -1070,7 +1095,7 @@ def build(source, output, config):
                 license_files['licenses/' + target] = (source / name).read_bytes()
     entities = read_entities(load_export(source / 'index.html'))
     garden = Garden(entities, source, config)
-    css = load_base_css(config) + '\n' + HtmlFormatter(style='native').get_style_defs('pre') + LIST_CSS
+    css = load_base_css(config) + '\n' + HtmlFormatter(style='native').get_style_defs('pre') + LIST_CSS + COLOR_CSS
     js = (HERE / 'garden.js').read_text()
     css_url = '/site/garden-' + sha256(css.encode()).hexdigest()[:12] + '.css'
     js_url = '/site/garden-' + sha256(js.encode()).hexdigest()[:12] + '.js'
@@ -1081,12 +1106,13 @@ def build(source, output, config):
         title = garden.label(eid)
         body = garden.page_content(eid)
         date = datetime.fromtimestamp(n['block/updated-at'] / 1000, timezone.utc).strftime('%d %b %Y') if n.get('block/updated-at') else ''
-        text = ' '.join(garden.label(i) for i, b in entities.items() if b.get('block/page') == eid)
+        text = ' '.join(garden.label(i) for i, b in entities.items()
+                        if b.get('block/page') == eid and i not in garden.property_values)
         description = config['description'] if eid == garden.home else strip_markdown(text)[:170]
         documents[garden.urls[eid]] = garden.shell(title, body, garden.urls[eid], css_url, js_url, home=eid == garden.home, description=description, date=date, theme_js=theme_js_url, crumbs=garden.crumbs(eid))
         search.append({'title':title, 'url':garden.href(garden.urls[eid]), 'text':text})
     expected = {i for i, b in entities.items() if b.get('block/page') in garden.pages and i not in garden.pages}
-    missed = expected - garden.rendered_ids
+    missed = expected - garden.rendered_ids - garden.property_values
     if missed:
         raise ValueError(f'{len(missed)} exported blocks have not been rendered: {sorted(missed)[:20]}')
     search_body = f'''<p class="intro">{len(garden.pages)} notes, connected by curiosity.</p><label class="search-label" for="search">Find a page</label><input type="search" id="search" placeholder="Search titles and notes…" autocomplete="off"><p id="search-status" class="muted" role="status">Browse all pages below. Type to search.</p><div id="search-results">{garden.page_list(garden.pages)}</div>'''

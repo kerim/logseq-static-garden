@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from build import (HERE, LIST_CSS, Garden, alpha_marker, build, load_base_css, read_entities,
-                   roman_marker, strip_markdown)
+from build import (COLOR_CSS, HERE, LIST_CSS, Garden, alpha_marker, build, load_base_css,
+                   read_entities, roman_marker, strip_markdown)
 from transit_reader import Reader
 
 
@@ -83,6 +83,20 @@ class PublishingTests(unittest.TestCase):
         for source in ('Euler: $e^{i\\pi}+1=0$ is neat', 'Area $x^2$ and $2x+1$ here', '$$x^2$$'):
             with self.subTest(source=source):
                 self.assertIn('math', self.g.md.render(source))
+
+    def test_alias_links_with_a_bracketed_page_name_or_uuid_reach_that_page(self):
+        text = self.g.md.render('[my notes]([[Notes]]) and [security]([[%s]]) and [kid](((%s)))' % (self.ids[1], self.ids[2]))
+        self.assertIn('href="' + self.g.urls[5] + '"', text)
+        self.assertIn('href="' + self.g.urls[2] + '"', text)
+        self.assertIn('#block-' + self.ids[2], text)
+        self.assertIn('>my notes<', text)
+        self.assertNotIn('pages/?q', text)
+        self.assertNotIn('%5B%5B', text)
+
+    def test_alias_link_to_a_page_that_is_not_published_is_not_a_link(self):
+        text = self.g.md.render('[gone]([[99999999-9999-4999-8999-999999999999]])')
+        self.assertIn('<span class="unavailable">gone</span>', text)
+        self.assertNotIn('<a ', text)
 
     def test_code_is_not_interpreted_as_page_links_or_html(self):
         content = self.g.md.render('`[[Home]]` <script>alert(1)</script>')
@@ -546,6 +560,63 @@ class NumberedListTests(unittest.TestCase):
     def test_the_list_stylesheet_does_not_depend_on_the_theme(self):
         self.assertIn('.list-number', LIST_CSS)
         self.assertIn('ol.outline{list-style:none}', LIST_CSS)
+
+
+class BlockColorTests(unittest.TestCase):
+    """A block's background color shows as a tint; the block that holds the color's name is not content."""
+
+    @staticmethod
+    def uuid(i):
+        return '44444444-4444-4444-8444-' + f'{i:012d}'
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.config = {'home_page': 'Home', 'title': 'My garden', 'navigation': [], 'description': 'Notes'}
+        self.nodes = {1: node('Home', self.uuid(1), **{'block/name': 'home'})}
+
+    def add(self, eid, title, color=None, order='a0'):
+        extra = {'block/page': 1, 'block/parent': 1, 'block/order': order}
+        if color:
+            # Logseq keeps the color's name as a block under the colored block.
+            extra['logseq.property/background-color'] = eid + 1000
+            self.nodes[eid + 1000] = node(color, self.uuid(eid + 1000), **{
+                'block/page': 1, 'block/parent': eid, 'block/order': 'aB',
+                'logseq.property/created-from-property': 47})
+        self.nodes[eid] = node(title, self.uuid(eid), **extra)
+
+    def page(self):
+        g = Garden(self.nodes, self.root, self.config)
+        return g, g.page_content(1)
+
+    def test_a_colored_block_gets_its_color_and_no_stray_child_bullet(self):
+        self.add(10, 'Careful now', color='green')
+        self.add(11, 'Plain note', order='a1')
+        g, content = self.page()
+        self.assertIn('<div class="block-body has-bg bg-green"><p>Careful now</p>', content)
+        self.assertEqual(content.count('has-bg'), 1)
+        self.assertNotIn('<p>green</p>', content)
+        self.assertNotIn('<details', content)
+        self.assertEqual(g.property_values, {1010})
+
+    def test_every_logseq_color_has_a_style(self):
+        for name in ('yellow', 'red', 'pink', 'green', 'blue', 'purple', 'gray'):
+            self.assertIn(f'.block-body.bg-{name}{{', COLOR_CSS)
+
+    def test_an_unknown_color_name_adds_no_color_but_still_no_stray_child(self):
+        self.add(10, 'Odd one', color='chartreuse')
+        _, content = self.page()
+        self.assertNotIn('has-bg', content)
+        self.assertNotIn('chartreuse', content)
+
+    def test_a_colored_block_with_children_keeps_them(self):
+        self.add(10, 'Parent', color='red')
+        self.nodes[20] = node('Child', self.uuid(20), **{'block/page': 1, 'block/parent': 10, 'block/order': 'a0'})
+        _, content = self.page()
+        self.assertIn('<summary><div class="block-body has-bg bg-red">', content)
+        self.assertLess(content.index('Parent'), content.index('Child'))
+        self.assertNotIn('<p>red</p>', content)
 
 
 class SectionUrlTests(unittest.TestCase):
