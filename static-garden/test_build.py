@@ -98,6 +98,23 @@ class PublishingTests(unittest.TestCase):
         self.assertIn('<span class="unavailable">gone</span>', text)
         self.assertNotIn('<a ', text)
 
+    def test_logseq_highlight_becomes_a_mark_and_may_hold_other_markup(self):
+        text = self.g.md.render('keep ^^this part^^ and ^^**bold** with [[Notes]]^^ here')
+        self.assertIn('keep <mark>this part</mark> and', text)
+        self.assertIn('<mark><strong>bold</strong> with <a class="page-ref"', text)
+        self.assertNotIn('^^', text)
+
+    def test_stray_or_quoted_highlight_marks_stay_as_typed(self):
+        for source in ('a ^^unclosed', '^^^^', 'x ^ y ^^', '`^^code^^`'):
+            with self.subTest(source=source):
+                self.assertNotIn('<mark>', self.g.md.render(source))
+
+    def test_highlight_marks_are_dropped_from_descriptions(self):
+        self.assertEqual(strip_markdown('a ^^b^^ c'), 'a b c')
+
+    def test_mark_has_a_style(self):
+        self.assertIn('mark{background:', COLOR_CSS)
+
     def test_code_is_not_interpreted_as_page_links_or_html(self):
         content = self.g.md.render('`[[Home]]` <script>alert(1)</script>')
         self.assertIn('<code>[[Home]]</code>', content)
@@ -601,7 +618,7 @@ class BlockColorTests(unittest.TestCase):
         self.assertEqual(g.property_values, {1010})
 
     def test_every_logseq_color_has_a_style(self):
-        for name in ('yellow', 'red', 'pink', 'green', 'blue', 'purple', 'gray'):
+        for name in ('yellow', 'red', 'green', 'blue', 'purple'):
             self.assertIn(f'.block-body.bg-{name}{{', COLOR_CSS)
 
     def test_an_unknown_color_name_adds_no_color_but_still_no_stray_child(self):

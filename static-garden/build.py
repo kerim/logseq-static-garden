@@ -214,6 +214,7 @@ def strip_markdown(text):
     """Reduce markdown source to plain text for use in a meta description."""
     text = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', text)
     text = text.replace('[[', '').replace(']]', '')
+    text = re.sub(r'\^\^(.+?)\^\^', r'\1', text)
     return re.sub(r'\s+', ' ', text).strip()
 
 
@@ -255,10 +256,13 @@ ol.root-outline{padding-left:22px}
 .block.numbered>details>summary:before{left:-36px}
 '''
 
-# Logseq's block background colors, as see-through tints that suit light and dark themes.
-BLOCK_COLORS = {'yellow': '234,179,8', 'red': '239,68,68', 'pink': '236,72,153', 'green': '34,197,94',
-                'blue': '59,130,246', 'purple': '168,85,247', 'gray': '128,128,128'}
-COLOR_CSS = '\n.block-body.has-bg{padding:6px 12px;border-radius:6px}\n' + ''.join(
+# The five block background colors Logseq offers (logseq.property/color.*), as see-through
+# tints that suit light and dark themes. Logseq has no text-color property; its inline
+# highlight (^^text^^) is shown as <mark> in the same yellow.
+BLOCK_COLORS = {'yellow': '234,179,8', 'red': '239,68,68', 'green': '34,197,94',
+                'blue': '59,130,246', 'purple': '168,85,247'}
+COLOR_CSS = ('\n.block-body.has-bg{padding:6px 12px;border-radius:6px}\n'
+             'mark{background:rgba(234,179,8,.3);color:inherit;padding:0 .15em;border-radius:3px}\n') + ''.join(
     f'.block-body.bg-{name}{{background:rgba({rgb},.2)}}\n' for name, rgb in BLOCK_COLORS.items())
 
 RESERVED_TOP_LEVEL_SLUGS = {'pages', 'graph', 'site', 'assets', 'licenses', 'downloads',
@@ -296,6 +300,25 @@ def normalize_base_path(raw):
     if not raw:
         return ''
     return '/' + raw.strip('/')
+
+
+def highlight_rule(state, silent):
+    """Logseq's inline highlight, ^^text^^, becomes <mark>text</mark>; the text may hold other markup."""
+    start = state.pos
+    if state.src[start:start + 2] != '^^':
+        return False
+    end = state.src.find('^^', start + 2, state.posMax)
+    if end == -1 or end == start + 2:
+        return False
+    if not silent:
+        outer_end = state.posMax
+        state.pos, state.posMax = start + 2, end
+        state.push('mark_open', 'mark', 1)
+        state.md.inline.tokenize(state)
+        state.push('mark_close', 'mark', -1)
+        state.posMax = outer_end
+    state.pos = end + 2
+    return True
 
 
 class Garden:
@@ -425,6 +448,7 @@ class Garden:
         # ("$5/month ... $15/month"), as in Pandoc; formulas like $x^2$ still render.
         self.md.use(dollarmath_plugin, renderer=self.math_html, allow_digits=False)
         self.md.inline.ruler.before('link', 'logseq_link', self.inline_link)
+        self.md.inline.ruler.before('emphasis', 'logseq_highlight', highlight_rule)
         self.md.renderer.rules['logseq_ref'] = self.render_ref
         self.md.renderer.rules['image'] = self.render_image
         original_link = self.md.renderer.rules.get('link_open')
