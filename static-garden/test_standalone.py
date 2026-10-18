@@ -43,6 +43,9 @@ class StandaloneTests(unittest.TestCase):
             notes = next(output.glob('page/notes--*/index.html')).read_text()
             self.assertIn('<math', notes)
             self.assertFalse((output / 'static/js').exists())
+            # Numbered lists need the builder's own list styles, whatever theme the site uses.
+            stylesheet = next((output / 'site').glob('garden-*.css')).read_text()
+            self.assertIn('.list-number', stylesheet)
 
     def test_incomplete_branding_fails_instead_of_mixing_identities(self):
         with tempfile.TemporaryDirectory() as temporary:

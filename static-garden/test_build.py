@@ -4,7 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from build import HERE, Garden, build, load_base_css, read_entities, strip_markdown
+from build import (HERE, LIST_CSS, Garden, alpha_marker, build, load_base_css, read_entities,
+                   roman_marker, strip_markdown)
 from transit_reader import Reader
 
 
@@ -409,6 +410,128 @@ class PublishingTests(unittest.TestCase):
             self.assertTrue(url.startswith('/x/') or url == '/x')
         search_entry_url = g.href(g.urls[g.home])
         self.assertTrue(search_entry_url.startswith('/x/') or search_entry_url == '/x')
+
+
+class NumberedListTests(unittest.TestCase):
+    """Logseq numbered lists (`order-list-type` = "number") must come out numbered, not as bullets."""
+
+    NUMBER = 90  # the "number" value block that numbered blocks point at
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.config = {'home_page': 'Home', 'title': 'My garden', 'navigation': [], 'description': 'Notes'}
+        self.nodes = {1: node('Home', self.uuid(1), **{'block/name': 'home'}),
+                      self.NUMBER: node('number', self.uuid(self.NUMBER), **{'block/page': 80, 'block/parent': 80})}
+
+    @staticmethod
+    def uuid(i):
+        return '33333333-3333-4333-8333-' + f'{i:012d}'
+
+    def add(self, eid, title, parent=1, order='a0', numbered=False):
+        extra = {'block/page': 1, 'block/parent': parent, 'block/order': order}
+        if numbered:
+            extra['logseq.property/order-list-type'] = self.NUMBER
+        self.nodes[eid] = node(title, self.uuid(eid), **extra)
+
+    def page(self):
+        return Garden(self.nodes, self.root, self.config).page_content(1)
+
+    @staticmethod
+    def labels(content):
+        return re.findall(r'class="list-number"[^>]*>([^<]*)<', content)
+
+    def test_numbered_siblings_become_an_ordered_list_numbered_from_one(self):
+        for i, order in enumerate(('a0', 'a1', 'a2')):
+            self.add(10 + i, f'Step {i}', order=order, numbered=True)
+        content = self.page()
+        self.assertEqual(content.count('<ol class="outline root-outline" type="1">'), 1)
+        self.assertEqual(self.labels(content), ['1.', '2.', '3.'])
+        self.assertEqual(content.count('<li class="block numbered"'), 3)
+        self.assertNotIn('class="bullet"', content)
+
+    def test_blocks_without_the_property_stay_plain_bullets(self):
+        self.add(10, 'Just a note')
+        content = self.page()
+        self.assertIn('<ul class="outline root-outline">', content)
+        self.assertIn('class="bullet"', content)
+        self.assertNotIn('<ol', content)
+        self.assertNotIn('list-number', content)
+
+    def test_a_plain_block_restarts_the_numbering(self):
+        self.add(10, 'One', order='a0', numbered=True)
+        self.add(11, 'Two', order='a1', numbered=True)
+        self.add(12, 'Aside', order='a2')
+        self.add(13, 'Again', order='a3', numbered=True)
+        content = self.page()
+        self.assertEqual(self.labels(content), ['1.', '2.', '1.'])
+        self.assertEqual(content.count('<ol '), 2)
+        self.assertEqual(content.count('<ul '), 1)
+        self.assertLess(content.index('Two'), content.index('Aside'))
+        self.assertLess(content.index('Aside'), content.index('Again'))
+
+    def test_nested_numbered_lists_count_in_letters_then_roman_numerals(self):
+        self.add(10, 'Method')
+        self.add(11, 'First', parent=10, order='a0', numbered=True)
+        self.add(12, 'Second', parent=10, order='a1', numbered=True)
+        self.add(13, 'Sub one', parent=11, order='a0', numbered=True)
+        self.add(14, 'Sub two', parent=11, order='a1', numbered=True)
+        self.add(15, 'Deep one', parent=13, order='a0', numbered=True)
+        self.add(16, 'Deep two', parent=13, order='a1', numbered=True)
+        content = self.page()
+        # The list under a plain block counts 1. 2.; inside "First" it is a. b.; inside that, i. ii.
+        self.assertEqual(re.findall(r'<ol class="outline[^"]*" type="(.)">', content), ['1', 'a', 'i'])
+        self.assertEqual(self.labels(content), ['1.', 'a.', 'i.', 'ii.', 'b.', '2.'])
+
+    def test_the_number_is_also_the_block_permalink(self):
+        self.add(10, 'Only step', numbered=True)
+        content = self.page()
+        self.assertIn(f'<a class="list-number" href="#block-{self.uuid(10)}"', content)
+        self.assertIn(f'id="block-{self.uuid(10)}"', content)
+
+    def test_collapsible_numbered_block_keeps_its_number_and_children(self):
+        self.add(10, 'Parent step', numbered=True)
+        self.add(11, 'Child note', parent=10)
+        content = self.page()
+        self.assertIn('<details open>', content)
+        self.assertEqual(self.labels(content), ['1.'])
+        self.assertLess(content.index('Parent step'), content.index('Child note'))
+
+    def test_only_the_number_list_type_makes_a_numbered_list(self):
+        self.nodes[91] = node('bullet', self.uuid(91), **{'block/page': 80, 'block/parent': 80})
+        self.add(10, 'Odd one', numbered=True)
+        self.nodes[10]['logseq.property/order-list-type'] = 91
+        self.assertNotIn('<ol', self.page())
+
+    def test_a_missing_value_block_still_counts_as_a_numbered_list(self):
+        self.add(10, 'Step', numbered=True)
+        del self.nodes[self.NUMBER]
+        self.assertIn('<ol', self.page())
+
+    def test_embedded_page_keeps_its_numbered_list(self):
+        self.nodes[2] = node('Steps', self.uuid(2), **{'block/name': 'steps'})
+        for eid, title, order in ((20, 'Do this', 'a0'), (21, 'Then this', 'a1')):
+            self.nodes[eid] = node(title, self.uuid(eid), **{
+                'block/page': 2, 'block/parent': 2, 'block/order': order,
+                'logseq.property/order-list-type': self.NUMBER})
+        self.nodes[10] = node('', self.uuid(10), **{'block/page': 1, 'block/parent': 1, 'block/order': 'a0',
+                                                    'block/link': 2, 'block/refs': [2]})
+        for style in ('boxed', 'inline'):
+            with self.subTest(embed_style=style):
+                self.config['embed_style'] = style
+                self.assertEqual(self.labels(self.page()), ['1.', '2.'])
+
+    def test_marker_helpers_match_how_browsers_count(self):
+        self.assertEqual([alpha_marker(n) for n in (1, 2, 26, 27, 28, 52, 53)],
+                         ['a', 'b', 'z', 'aa', 'ab', 'az', 'ba'])
+        self.assertEqual([roman_marker(n) for n in (1, 2, 4, 9, 14, 40, 1994)],
+                         ['i', 'ii', 'iv', 'ix', 'xiv', 'xl', 'mcmxciv'])
+        self.assertEqual(roman_marker(4000), '4000')
+
+    def test_the_list_stylesheet_does_not_depend_on_the_theme(self):
+        self.assertIn('.list-number', LIST_CSS)
+        self.assertIn('ol.outline{list-style:none}', LIST_CSS)
 
 
 class SectionUrlTests(unittest.TestCase):

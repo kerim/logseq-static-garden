@@ -217,6 +217,44 @@ def strip_markdown(text):
     return re.sub(r'\s+', ' ', text).strip()
 
 
+# A Logseq numbered list counts 1. 2. 3.; one nested inside a numbered block counts
+# a. b. c., then i. ii. iii., then starts over. Each style is (<ol type=...>, label).
+def alpha_marker(n):
+    out = ''
+    while n > 0:
+        n, rest = divmod(n - 1, 26)
+        out = chr(97 + rest) + out
+    return out
+
+
+ROMAN_VALUES = (('m', 1000), ('cm', 900), ('d', 500), ('cd', 400), ('c', 100),
+                ('xc', 90), ('l', 50), ('xl', 40), ('x', 10), ('ix', 9),
+                ('v', 5), ('iv', 4), ('i', 1))
+
+
+def roman_marker(n):
+    if not 0 < n < 4000:
+        return str(n)
+    out = ''
+    for symbol, value in ROMAN_VALUES:
+        while n >= value:
+            out += symbol
+            n -= value
+    return out
+
+
+LIST_STYLES = (('1', str), ('a', alpha_marker), ('i', roman_marker))
+
+# Appended after the site's own stylesheet, so numbered lists look right in any theme.
+LIST_CSS = '''
+ol.outline{list-style:none}
+ol.root-outline{padding-left:22px}
+.outline.continued{margin-top:0}
+.list-number{position:absolute;right:100%;top:1px;margin-right:5px;font-size:14px;line-height:1.7;color:var(--faint,#8b9398);white-space:nowrap}
+.list-number:hover{color:var(--accent,#c4433f);text-decoration:none}
+.block.numbered>details>summary:before{left:-36px}
+'''
+
 RESERVED_TOP_LEVEL_SLUGS = {'pages', 'graph', 'site', 'assets', 'licenses', 'downloads',
                             '404.html', 'robots.txt', 'sitemap.xml', '_headers'}
 
@@ -697,7 +735,57 @@ class Garden:
             props.append(f'<dt>{label}</dt><dd>{", ".join(items)}</dd>')
         return '<dl class="properties">' + ''.join(props) + '</dl>' if props else ''
 
-    def block(self, eid, ancestors=()):
+    def is_numbered(self, eid):
+        """True for a block that Logseq shows as an item of a numbered list."""
+        value = self.entities.get(eid, {}).get('logseq.property/order-list-type')
+        # The value is a block titled "number". Should it not be in the export,
+        # "number" is still the only list type Logseq offers.
+        return value is not None and any(
+            str(self.entities.get(v, {}).get('block/title', 'number')).casefold() == 'number'
+            for v in values(value))
+
+    def list_style(self, eid):
+        """Index into LIST_STYLES: 0 for an outermost numbered list, then one more
+        for each numbered block the list is nested inside."""
+        depth, seen = 0, {eid}
+        parent = self.entities[eid].get('block/parent')
+        while parent not in seen and self.is_numbered(parent):
+            seen.add(parent)
+            depth += 1
+            parent = self.entities[parent].get('block/parent')
+        return depth % len(LIST_STYLES)
+
+    def outline(self, items, classes='outline'):
+        """Lay blocks out as lists: a <ul> for plain blocks and an <ol> for each run
+        of numbered ones. A run is neighbouring numbered blocks of one list style;
+        it counts from 1 and starts over after any plain block, as in Logseq.
+        `items` come from `blocks()`: ('block', eid, ancestors) or ('html', li)."""
+        groups = []  # (list style or None, [rendered <li>, ...])
+        for item in items:
+            numbered = item[0] == 'block' and self.is_numbered(item[1])
+            style = self.list_style(item[1]) if numbered else None
+            if not groups or groups[-1][0] != style:
+                groups.append((style, []))
+            parts = groups[-1][1]
+            if item[0] != 'block':
+                parts.append(item[1])
+            else:
+                marker = LIST_STYLES[style][1](len(parts) + 1) if numbered else None
+                parts.append(self.block(item[1], item[2], marker))
+        if not groups:
+            return f'<ul class="{classes}"></ul>'
+        lists = []
+        for position, (style, parts) in enumerate(groups):
+            cls = classes if position == 0 else classes + ' continued'
+            if style is None:
+                lists.append(f'<ul class="{cls}">{"".join(parts)}</ul>')
+            else:
+                lists.append(f'<ol class="{cls}" type="{LIST_STYLES[style][0]}">{"".join(parts)}</ol>')
+        return ''.join(lists)
+
+    def block(self, eid, ancestors=(), marker=None):
+        """One block as an <li>. `marker` is its number in a numbered list, as shown
+        ('1', 'b', 'iii'), or None for a plain bullet."""
         if eid in ancestors:
             raise ValueError(f'Cycle in block tree: {eid}')
         n = self.entities[eid]
@@ -730,41 +818,48 @@ class Garden:
             body += '<p class="muted">Query source</p>'
         body += self.properties(n)
         children = self.children[eid]
-        nested = '<ul class="outline">' + self.blocks(children, (*ancestors, eid)) + '</ul>' if children else ''
+        nested = self.outline(self.blocks(children, (*ancestors, eid))) if children else ''
         anchor = 'block-' + n['block/uuid']
-        permalink = f'<a class="bullet" href="#{anchor}" aria-label="Link to this block">•</a>'
+        if marker is None:
+            permalink = f'<a class="bullet" href="#{anchor}" aria-label="Link to this block">•</a>'
+        else:
+            permalink = (f'<a class="list-number" href="#{anchor}" '
+                         f'aria-label="Link to this block, item {marker}">{marker}.</a>')
         if children:
             opened = '' if n.get('block/collapsed?') else ' open'
             content = f'<details{opened}><summary><div class="block-body">{body}</div></summary>{nested}</details>'
         else:
             content = '<div class="block-body">' + body + '</div>'
-        return f'<li class="block" id="{anchor}">{permalink}{content}</li>'
+        classes = 'block' if marker is None else 'block numbered'
+        return f'<li class="{classes}" id="{anchor}">{permalink}{content}</li>'
 
     def blocks(self, ids, ancestors):
+        """What to show for these block ids, as items for `outline`. With
+        embed_style 'inline', an embed is replaced by what it points at."""
         if self.config.get('embed_style', 'boxed') != 'inline':
-            return ''.join(self.block(c, ancestors) for c in ids)
-        parts = []
+            return [('block', c, ancestors) for c in ids]
+        items = []
         for c in ids:
             n = self.entities[c]
             link = n.get('block/link')
             text = n.get('block/title', '')
             if link is None or text.strip():
-                parts.append(self.block(c, ancestors))
+                items.append(('block', c, ancestors))
                 continue
             target = link
             if target in ancestors:
                 self.rendered_ids.add(c)
                 self.warnings.add(f'Recursive embed skipped: {n.get("block/uuid")}')
-                parts.append('<li class="block muted">Recursive embed</li>')
+                items.append(('html', '<li class="block muted">Recursive embed</li>'))
             elif target in self.pages:
                 self.rendered_ids.add(c)
-                parts.append(self.blocks(self.children[target], (*ancestors, c, target)))
+                items.extend(self.blocks(self.children[target], (*ancestors, c, target)))
             elif target in self.entities and 'block/uuid' in self.entities[target] and 'block/name' not in self.entities[target]:
                 self.rendered_ids.add(c)
-                parts.append(self.block(target, ancestors))
+                items.append(('block', target, ancestors))
             else:
-                parts.append(self.block(c, ancestors))
-        return ''.join(parts)
+                items.append(('block', c, ancestors))
+        return items
 
     def embed(self, target, ancestors):
         # DB graphs store {{embed}} as an empty block whose block/link points at a page or block.
@@ -772,13 +867,13 @@ class Garden:
             self.warnings.add(f'Recursive embed skipped: {self.entities[target].get("block/uuid")}')
             return '<p class="muted">Recursive embed</p>'
         if target in self.pages:
-            inner = '<ul class="outline">' + ''.join(self.block(c, ancestors) for c in self.children[target]) + '</ul>'
+            inner = self.outline([('block', c, ancestors) for c in self.children[target]])
             if not self.config.get('embed_titles', True):
                 return f'<div class="embed page-embed">{inner}</div>'
             title = f'<a class="page-ref" href="{escape(self.href(self.urls[target]))}">{escape(self.label(target))}</a>'
             return f'<div class="embed page-embed"><div class="embed-title">{title}</div>{inner}</div>'
         if target in self.entities and 'block/uuid' in self.entities[target] and 'block/name' not in self.entities[target]:
-            return '<div class="embed block-embed"><ul class="outline">' + self.block(target, ancestors) + '</ul></div>'
+            return '<div class="embed block-embed">' + self.outline([('block', target, ancestors)]) + '</div>'
         self.warnings.add(f'Embed target not exported: {target}')
         return '<p class="muted">Embedded content is not public</p>'
 
@@ -817,7 +912,7 @@ class Garden:
         children = self.children[eid]
         # Include exported orphan roots, so missing parents cannot silently lose content.
         orphans = [i for i, b in self.entities.items() if b.get('block/page') == eid and b.get('block/parent') not in self.entities and i not in children]
-        body = self.properties(n) + '<ul class="outline root-outline">' + self.blocks(children + orphans, (eid,)) + '</ul>'
+        body = self.properties(n) + self.outline(self.blocks(children + orphans, (eid,)), 'outline root-outline')
         child_pages = {i for i, page in self.pages.items() if page.get('block/parent') == eid}
         if child_pages:
             body += f'<section class="connections"><h2>Pages within</h2>{self.page_list(child_pages)}</section>'
@@ -974,7 +1069,7 @@ def build(source, output, config):
                 license_files['licenses/' + target] = (source / name).read_bytes()
     entities = read_entities(load_export(source / 'index.html'))
     garden = Garden(entities, source, config)
-    css = load_base_css(config) + '\n' + HtmlFormatter(style='native').get_style_defs('pre')
+    css = load_base_css(config) + '\n' + HtmlFormatter(style='native').get_style_defs('pre') + LIST_CSS
     js = (HERE / 'garden.js').read_text()
     css_url = '/site/garden-' + sha256(css.encode()).hexdigest()[:12] + '.css'
     js_url = '/site/garden-' + sha256(js.encode()).hexdigest()[:12] + '.js'
