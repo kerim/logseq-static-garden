@@ -71,6 +71,19 @@ class PublishingTests(unittest.TestCase):
         self.assertIn(self.g.urls[5], text)
         self.assertNotIn(self.ids[1] + ']]', text)
 
+    def test_dollar_amounts_stay_text_and_are_not_taken_for_a_formula(self):
+        text = 'a "backer" ($5/month) or "sponsor" ($15/month) on OpenCollective'
+        result = self.g.md.render(text)
+        self.assertIn('($5/month)', result)
+        self.assertIn('($15/month)', result)
+        self.assertNotIn('math', result)
+        self.assertEqual(self.g.math, {})
+
+    def test_real_formulas_still_render_as_math(self):
+        for source in ('Euler: $e^{i\\pi}+1=0$ is neat', 'Area $x^2$ and $2x+1$ here', '$$x^2$$'):
+            with self.subTest(source=source):
+                self.assertIn('math', self.g.md.render(source))
+
     def test_code_is_not_interpreted_as_page_links_or_html(self):
         content = self.g.md.render('`[[Home]]` <script>alert(1)</script>')
         self.assertIn('<code>[[Home]]</code>', content)

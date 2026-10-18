@@ -412,7 +412,9 @@ class Garden:
                     self.tagged[tag].add(page)
         self.md = MarkdownIt('commonmark', {'html': False, 'breaks': True, 'highlight': self.code})
         self.md.enable('table').enable('strikethrough')
-        self.md.use(dollarmath_plugin, renderer=self.math_html)
+        # allow_digits=False: a `$` next to a digit is a dollar amount, not a formula
+        # ("$5/month ... $15/month"), as in Pandoc; formulas like $x^2$ still render.
+        self.md.use(dollarmath_plugin, renderer=self.math_html, allow_digits=False)
         self.md.inline.ruler.before('link', 'logseq_link', self.inline_link)
         self.md.renderer.rules['logseq_ref'] = self.render_ref
         self.md.renderer.rules['image'] = self.render_image
