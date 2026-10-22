@@ -76,6 +76,12 @@ def values(value):
 VIDEO_FILE = re.compile(r'\.(?:mp4|webm|ogg|mov)', re.I)
 VIDEO_MACRO = re.compile(r'(`+).+?\1|\{\{video\s+[^{}]+?\}\}')  # a code span (skipped) or a video macro
 FENCE = re.compile(r'[ ]{0,3}(`{3,}|~{3,})(.*)')
+# Logseq's built-in #+BEGIN_<NAME> ... #+END_<NAME> blocks, matched as Logseq does:
+# in any case, with anything after the name ignored.
+CALLOUT_NAMES = 'NOTE|TIP|IMPORTANT|CAUTION|PINNED|WARNING|EXAMPLE|VERSE|CENTER'
+CALLOUT_BEGIN = re.compile(r'[ ]{0,3}#\+BEGIN_(' + CALLOUT_NAMES + r')(?:\s.*)?', re.I)
+CALLOUT_MARKER = re.compile(
+    r'^[ ]{0,3}#\+(?:BEGIN|END)_(?:' + CALLOUT_NAMES + r')\b.*$', re.I | re.M)
 
 
 def video_argument(raw):
@@ -179,18 +185,25 @@ def video_segments(text):
     whole = video_html(text)
     if whole is not None:
         return [('video', whole)]
-    segments, chunk, fence, found = [], [], None, False
+    segments, chunk, fence, callout, found = [], [], None, None, False
     def flush():
         if any(line.strip() for line in chunk):
             segments.append(('markdown', '\n'.join(chunk)))
         chunk.clear()
     for line in text.split('\n'):
         marker = FENCE.fullmatch(line)
-        if marker:
+        begin = CALLOUT_BEGIN.fullmatch(line)
+        if marker and callout is None:
             if fence is None:
                 fence = marker[1]
             elif marker[1][0] == fence[0] and len(marker[1]) >= len(fence) and not marker[2].strip():
                 fence = None
+        elif fence is None and callout is None and begin:
+            callout = re.compile(r'[ ]{0,3}#\+END_' + begin[1] + r'\s*', re.I)
+        elif callout is not None:
+            # A callout stays whole: splitting it around a player would part its ends.
+            if callout.fullmatch(line):
+                callout = None
         elif fence is None and not line.startswith(('>', '    ', '\t')):
             pos = 0
             for macro in VIDEO_MACRO.finditer(line):
@@ -215,6 +228,7 @@ def strip_markdown(text):
     text = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', text)
     text = text.replace('[[', '').replace(']]', '')
     text = re.sub(r'\^\^(.+?)\^\^', r'\1', text)
+    text = CALLOUT_MARKER.sub('', text)
     return re.sub(r'\s+', ' ', text).strip()
 
 
@@ -319,6 +333,94 @@ def highlight_rule(state, silent):
         state.posMax = outer_end
     state.pos = end + 2
     return True
+
+
+# Logseq's callout icons, redrawn as outlines. The color comes from the stylesheet.
+CALLOUT_ICONS = {
+    'note': '<circle cx="12" cy="12" r="9.5"/><path d="M12 11v6M12 7.5v.01"/>',
+    'tip': ('<path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8c.7.5 1.1 1.3 1.1 2.2h5'
+            'c0-.9.4-1.7 1.1-2.2A6 6 0 0 0 12 3z"/>'),
+    'important': '<circle cx="12" cy="12" r="9.5"/><path d="M12 7v6M12 16.5v.01"/>',
+    'caution': ('<path d="M12 21.5c3.9 0 6.5-2.6 6.5-6.2 0-3.4-2.3-5.6-3.8-8.3-.5 2-1.4 '
+                '3-2.9 3.5.2-3.2-.9-5.9-3.3-8 0 3.8-3.5 6.2-3.5 11 0 4.4 2.9 8 7 8z"/>'),
+    'warning': ('<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9'
+                'a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17v.01"/>'),
+    'pinned': '<path d="M9 3h6M10 3v6l-3 4h10l-3-4V3M12 13v8"/>',
+}
+
+# Appended after the site's own stylesheet. Logseq draws a callout as a padded box with
+# the icon behind a thin divider and the text a little larger; red marks "important",
+# orange "caution" and "warning".
+CALLOUT_CSS = '''
+.callout{display:flex;align-items:stretch;gap:16px;margin:8px 0;padding:8px}
+.callout-icon{display:flex;align-items:center;padding-right:16px;
+  border-right:1px solid var(--line,#dcdee0);color:var(--text,#292c2e)}
+.callout-icon svg{width:32px;height:32px;fill:none;stroke:currentColor;
+  stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.callout-important .callout-icon{color:#ef4444}
+.callout-caution .callout-icon,.callout-warning .callout-icon{color:#f97316}
+.callout-body{flex:1;min-width:0;font-size:1.1em}
+.callout-body>:first-child{margin-top:0}
+.callout-body>:last-child{margin-bottom:0}
+.callout-center{text-align:center}
+pre.callout-example{white-space:pre-wrap;overflow-wrap:anywhere}
+'''
+
+
+def callout_rule(state, start, end, silent):
+    """Logseq's #+BEGIN_<NAME> ... #+END_<NAME> blocks. Callouts, centered and verse
+    text hold Markdown; an example keeps its text exactly as typed. A block with no end
+    line stays as typed, as in Logseq."""
+    if state.sCount[start] - state.blkIndent >= 4:
+        return False
+    def line(n):
+        return state.src[state.bMarks[n] + state.tShift[n]:state.eMarks[n]]
+    begin = CALLOUT_BEGIN.fullmatch(line(start))
+    if not begin:
+        return False
+    name = begin[1].lower()
+    close = re.compile(r'#\+END_' + name + r'\s*', re.I)
+    last = start + 1
+    while last < end and not close.fullmatch(line(last)):
+        last += 1
+    if last >= end:
+        return False
+    if silent:
+        return True
+    if name == 'example':
+        token = state.push('logseq_example', 'pre', 0)
+        token.content = state.getLines(start + 1, last, state.blkIndent, False)
+    else:
+        token = state.push('logseq_callout_open', 'div', 1)
+        token.info = name
+        outer = state.parentType, state.lineMax
+        state.parentType, state.lineMax = 'logseq_callout', last
+        state.md.block.tokenize(state, start + 1, last)
+        state.parentType, state.lineMax = outer
+        state.push('logseq_callout_close', 'div', -1).info = name
+    token.map = [start, last + 1]
+    state.line = last + 1
+    return True
+
+
+def render_callout_open(tokens, idx, options, env):
+    name = tokens[idx].info
+    if name not in CALLOUT_ICONS:
+        return f'<div class="callout-{name}">'
+    label = name.capitalize()
+    return (f'<div class="callout callout-{name}"><span class="callout-icon" role="img" '
+            f'aria-label="{label}" title="{label}"><svg viewBox="0 0 24 24" '
+            f'aria-hidden="true" focusable="false">{CALLOUT_ICONS[name]}</svg></span>'
+            '<div class="callout-body">')
+
+
+def render_callout_close(tokens, idx, options, env):
+    return '</div></div>\n' if tokens[idx].info in CALLOUT_ICONS else '</div>\n'
+
+
+def render_example(tokens, idx, options, env):
+    text = escape(tokens[idx].content.rstrip('\n'))
+    return '<pre class="callout-example">' + text + '</pre>\n'
 
 
 class Garden:
@@ -450,6 +552,11 @@ class Garden:
         self.md.inline.ruler.before('link', 'logseq_link', self.inline_link)
         self.md.inline.ruler.before('emphasis', 'logseq_highlight', highlight_rule)
         self.md.renderer.rules['logseq_ref'] = self.render_ref
+        self.md.block.ruler.before('fence', 'logseq_callout', callout_rule,
+                                   {'alt': ['paragraph', 'reference', 'blockquote', 'list']})
+        self.md.renderer.rules['logseq_callout_open'] = render_callout_open
+        self.md.renderer.rules['logseq_callout_close'] = render_callout_close
+        self.md.renderer.rules['logseq_example'] = render_example
         self.md.renderer.rules['image'] = self.render_image
         original_link = self.md.renderer.rules.get('link_open')
         def link_open(tokens, idx, options, env):
@@ -1119,7 +1226,7 @@ def build(source, output, config):
                 license_files['licenses/' + target] = (source / name).read_bytes()
     entities = read_entities(load_export(source / 'index.html'))
     garden = Garden(entities, source, config)
-    css = load_base_css(config) + '\n' + HtmlFormatter(style='native').get_style_defs('pre') + LIST_CSS + COLOR_CSS
+    css = load_base_css(config) + '\n' + HtmlFormatter(style='native').get_style_defs('pre') + LIST_CSS + COLOR_CSS + CALLOUT_CSS
     js = (HERE / 'garden.js').read_text()
     css_url = '/site/garden-' + sha256(css.encode()).hexdigest()[:12] + '.css'
     js_url = '/site/garden-' + sha256(js.encode()).hexdigest()[:12] + '.js'

@@ -4,8 +4,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from build import (COLOR_CSS, HERE, LIST_CSS, Garden, alpha_marker, build, load_base_css,
-                   read_entities, roman_marker, strip_markdown)
+from build import (CALLOUT_CSS, CALLOUT_ICONS, COLOR_CSS, HERE, LIST_CSS, Garden, alpha_marker,
+                   build, load_base_css, read_entities, roman_marker, strip_markdown,
+                   video_segments)
 from transit_reader import Reader
 
 
@@ -727,6 +728,68 @@ class NavigationPageTests(unittest.TestCase):
         g = Garden(self.nodes, self.root, config)
         self.assertEqual(g.urls[2], '/security/')
         self.assertEqual(g.urls[3], '/taiwan/')
+
+
+class CalloutTests(unittest.TestCase):
+    """Logseq's #+BEGIN_<NAME> ... #+END_<NAME> blocks render as Logseq draws them."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        home = node('Home', '55555555-5555-4555-8555-000000000001', **{'block/name': 'home'})
+        self.g = Garden({1: home}, Path(self.temp.name),
+                        {'home_page': 'Home', 'title': 'My garden', 'navigation': [], 'description': 'Notes'})
+
+    def render(self, source):
+        return self.g.md.render(source)
+
+    def test_each_callout_gets_its_icon_label_and_markdown_body(self):
+        for name in ('note', 'tip', 'important', 'caution', 'warning', 'pinned'):
+            with self.subTest(name=name):
+                html = self.render(f'#+BEGIN_{name.upper()}\nSee **this** and [[Home]]\n#+END_{name.upper()}')
+                self.assertIn(f'<div class="callout callout-{name}">', html)
+                self.assertIn(f'aria-label="{name.capitalize()}"', html)
+                self.assertIn(CALLOUT_ICONS[name], html)
+                self.assertIn('<div class="callout-body"><p>See <strong>this</strong> and <a class="page-ref"', html)
+                self.assertNotIn('#+', html)
+
+    def test_names_match_in_any_case(self):
+        self.assertIn('callout-tip', self.render('#+begin_tip\nHi\n#+End_Tip'))
+
+    def test_example_keeps_its_text_exactly_as_typed(self):
+        html = self.render('#+BEGIN_EXAMPLE\n  keep **this** <b>\n#+END_EXAMPLE')
+        self.assertEqual(html, '<pre class="callout-example">  keep **this** &lt;b&gt;</pre>\n')
+
+    def test_center_and_verse_hold_markdown_without_an_icon(self):
+        self.assertEqual(self.render('#+BEGIN_CENTER\n*Mid*\n#+END_CENTER'),
+                         '<div class="callout-center"><p><em>Mid</em></p>\n</div>\n')
+        self.assertEqual(self.render('#+BEGIN_VERSE\n\n   A verse.\n\n#+END_VERSE'),
+                         '<div class="callout-verse"><p>A verse.</p>\n</div>\n')
+
+    def test_text_around_a_callout_stays_outside_it(self):
+        html = self.render('Before\n#+BEGIN_NOTE\nInside\n#+END_NOTE\nAfter')
+        self.assertTrue(html.startswith('<p>Before</p>\n<div class="callout callout-note">'))
+        self.assertTrue(html.endswith('</div></div>\n<p>After</p>\n'))
+
+    def test_a_block_without_its_end_or_inside_code_stays_as_typed(self):
+        for source in ('#+BEGIN_WARNING\nno end', '#+BEGIN_NOTE\nx\n#+END_TIP',
+                       '```\n#+BEGIN_NOTE\nx\n#+END_NOTE\n```', '    #+BEGIN_NOTE\n    x\n    #+END_NOTE'):
+            with self.subTest(source=source):
+                html = self.render(source)
+                self.assertNotIn('callout', html)
+                self.assertIn('#+', html)
+
+    def test_a_video_inside_a_callout_does_not_split_it(self):
+        self.assertIsNone(video_segments(
+            '#+BEGIN_NOTE\n{{video https://www.youtube.com/watch?v=dQw4w9WgXcQ}}\n#+END_NOTE'))
+
+    def test_callout_markers_are_dropped_from_descriptions(self):
+        self.assertEqual(strip_markdown('#+BEGIN_NOTE\nRead me\n#+END_NOTE'), 'Read me')
+
+    def test_every_callout_has_a_style(self):
+        for selector in ('.callout{', '.callout-icon{', '.callout-important .callout-icon',
+                         '.callout-warning .callout-icon', '.callout-center{', 'pre.callout-example{'):
+            self.assertIn(selector, CALLOUT_CSS)
 
 
 if __name__ == '__main__':
