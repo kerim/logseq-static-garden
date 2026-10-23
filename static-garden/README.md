@@ -182,21 +182,39 @@ references them:
 
 ## Deriving navigation from a page
 
-Setting `"navigation_page"` to a page title (e.g. `"Topics"`) replaces `"navigation"`
+A page titled `Topics` (or the title set in `"navigation_page"`) replaces `"navigation"`
 with the list of pages that page's top-level blocks reference, in block order (first
 `block/refs` entry, embed `block/link`, or `[[ref]]` in the title; duplicates and
 blocks with no page reference are skipped). The navigation page itself is never
 published. If it's missing from the export or yields no pages, the build falls back to
-`"navigation"` and logs a warning.
+`"navigation"`; it logs a warning only when `"navigation_page"` was set.
 
 ## Hiding properties
 
-Setting `"hidden_properties_page"` to a page title (e.g. `"Hidden Properties"`)
+A page titled `Hidden Properties` (or the title set in `"hidden_properties_page"`)
 hides every property that page links to, via `[[Property name]]` in any of its
 blocks. A hidden property's values are left off every page and block, and the
 property's own page is not published. The list page itself is never published.
 If the page is missing from the export or links to no properties, every property
-is shown and the build logs a warning.
+is shown; the build logs a warning only when `"hidden_properties_page"` was set.
+
+## Link preview image
+
+The first image on a page titled `Link Preview` (or the title set in
+`"link_preview_page"`) becomes the picture social sites and chat apps show when
+any page of the site is shared (`og:image`, with a large `twitter:card`). It can
+be a pasted image or a Markdown image link, anywhere in the page's outline;
+changing the picture means replacing that image and exporting again. The page
+itself is never published. Without such an image the site logo is used, and a
+warning is logged only when `"link_preview_page"` was set.
+
+## Admin pages
+
+Every page tagged `#garden-admin` (or the tag set in `"admin_tag"`) is left off
+the site, and so is the tag's own page. Tag Topics, Hidden Properties, Link
+Preview and any other behind-the-scenes page with it; a page listing them all,
+tagged the same way, makes them easy to find in Logseq. Links to these pages
+from published pages show as plain text.
 
 ## Serving several sites from one builder
 
@@ -221,7 +239,10 @@ Three `site.json` options let one exporter build several distinct sites:
   and legacy-link redirects still resolve correctly. Files are still written
   to disk at their normal relative paths under the output directory; only the
   URLs embedded in the generated content change. This fits how GitHub Pages
-  already serves a repository's Pages output prefixed at `/<repo>/`.
+  already serves a repository's Pages output prefixed at `/<repo>/`. The
+  site's `"url"` may be given with or without the prefix
+  (`https://user.github.io/logseq-faq` or `https://user.github.io`); full URLs
+  never repeat it.
 - `"exclude_pages"`: a list of page titles to drop from publishing even though
   they'd otherwise be public. They're removed the same way the navigation
   page itself is removed: dropped from the page set and from the name index,
@@ -232,7 +253,7 @@ Three `site.json` options let one exporter build several distinct sites:
 
 | File | Purpose |
 | --- | --- |
-| `site.json` | Generic defaults; publishers normally supply `SOURCE/site.json`; optional `author`/`license` render as the sidebar license note (a known `license` name such as `"CC BY 4.0"` is linked), optional `url_style` (see below), optional `theme_css`/`base_path`/`exclude_pages` (see "Serving several sites from one builder"), optional `hidden_properties_page` (see "Hiding properties") |
+| `site.json` | Generic defaults; publishers normally supply `SOURCE/site.json`; optional `author`/`license` render as the sidebar license note (a known `license` name such as `"CC BY 4.0"` is linked), optional `url_style` (see below), optional `theme_css`/`base_path`/`exclude_pages` (see "Serving several sites from one builder"), optional `hidden_properties_page` (see "Hiding properties"), `link_preview_page` (see "Link preview image") and `admin_tag` (see "Admin pages") |
 | `build.py` / `transit_reader.py` | Decode the graph, render pages, copy attachments, emit headers |
 | `garden.css` / `garden.js` | Main layout, search, legacy bookmarks |
 | `graph-layout.cjs` / `graph.js` / `graph.css` | Graph layout and browser viewer |

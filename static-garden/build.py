@@ -1,24 +1,25 @@
 #!/usr/bin/env python3
 """Compile Logseq DB public-page exports to static HTML. Never execute graph text."""
 import argparse
-from collections import defaultdict
-from datetime import datetime, timezone
-from hashlib import sha256
-from html import escape, unescape
 import json
-from pathlib import Path
 import re
 import shutil
 import subprocess
 import tempfile
+from collections import defaultdict
+from datetime import datetime, timezone
+from hashlib import sha256
+from html import escape, unescape
+from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from markdown_it import MarkdownIt
 from mdit_py_plugins.dollarmath import dollarmath_plugin
 from pygments import highlight
 from pygments.formatters import HtmlFormatter
-from pygments.lexers import get_lexer_by_name, TextLexer
+from pygments.lexers import TextLexer, get_lexer_by_name
 from pygments.util import ClassNotFound
+
 from transit_reader import load_export
 
 HERE = Path(__file__).resolve().parent
@@ -31,6 +32,10 @@ LICENSE_URLS = {'CC BY 4.0': 'https://creativecommons.org/licenses/by/4.0/'}
 # else gets an inert extension and download-only response headers.
 INLINE_ASSETS = {'.png', '.jpg', '.jpeg', '.webp', '.gif', '.avif', '.ico',
                  '.mp3', '.ogg', '.wav', '.m4a', '.flac', '.mp4', '.webm', '.mov', '.pdf'}
+# Attachment types shown as pictures; the first one on the Link Preview page
+# becomes the site's share image.
+IMAGE_TYPES = ('png', 'jpg', 'jpeg', 'webp', 'gif', 'avif')
+MD_IMAGE = re.compile(r'!\[[^\]]*\]\(([^)\s]+)')
 HEADERS = """/*
   Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' https: data:; font-src 'self'; connect-src 'self'; media-src 'self' https:; frame-src https://www.youtube-nocookie.com https://player.vimeo.com; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
   X-Frame-Options: DENY
@@ -120,7 +125,7 @@ def youtube_embed(parts, title):
     if re.fullmatch(r'\d{1,8}', stamp):
         start = int(stamp)
     elif time:
-        start = sum(int(n or 0) * multiplier for n, multiplier in zip(time.groups(), (3600, 60, 1)))
+        start = sum(int(n or 0) * multiplier for n, multiplier in zip(time.groups(), (3600, 60, 1), strict=False))
     start = min(start, 2147483647)
     src = f'https://www.youtube-nocookie.com/embed/{video_id}?playsinline=1' + (f'&start={start}' if start else '')
     watch = f'https://www.youtube.com/watch?v={video_id}' + (f'&t={start}s' if start else '')
@@ -453,10 +458,7 @@ class Garden:
         for excluded_title in config.get('exclude_pages', []):
             excluded_eid = self.resolve(excluded_title)
             if excluded_eid in self.pages:
-                for key, val in list(self.names.items()):
-                    if val == excluded_eid:
-                        del self.names[key]
-                del self.pages[excluded_eid]
+                self.unpublish(excluded_eid)
         self.home = self.resolve(config['home_page'])
         if self.home not in self.pages:
             raise ValueError(f'Home page not found: {config["home_page"]}')
@@ -472,7 +474,9 @@ class Garden:
         for ids in self.children.values():
             ids.sort(key=lambda i: (entities[i].get('block/order', ''), i))
         self.hidden_properties = set()
-        hidden_page_title = config.get('hidden_properties_page')
+        # The special pages have default titles, so a graph that uses them needs no
+        # config; only a title set in the config warns when its page is missing.
+        hidden_page_title = config.get('hidden_properties_page', 'Hidden Properties')
         if hidden_page_title:
             hidden_page = self.resolve(hidden_page_title)
             if hidden_page in self.pages:
@@ -486,16 +490,15 @@ class Garden:
                 # The list page and each hidden property's own page are never published.
                 hidden_pages = [hidden_page] + [i for i, n in self.pages.items() if n.get('db/ident') in self.hidden_properties]
                 for eid in hidden_pages:
-                    for key, val in list(self.names.items()):
-                        if val == eid:
-                            del self.names[key]
-                    del self.pages[eid]
-            if not self.hidden_properties:
+                    self.unpublish(eid)
+            if not self.hidden_properties and 'hidden_properties_page' in config:
                 self.warnings.add(f"hidden_properties_page '{hidden_page_title}' not found or lists no properties; showing all properties")
         self.url_style = config.get('url_style', 'uuid')
-        nav_page_title = config.get('navigation_page')
+        nav_page_title = config.get('navigation_page', 'Topics')
+        nav_configured = 'navigation_page' in config
         self.nav_ids = None
-        if nav_page_title:
+        nav_found = self.resolve(nav_page_title) in self.pages
+        if nav_page_title and (nav_configured or nav_found):
             nav_page_eid = self.resolve(nav_page_title)
             if nav_page_eid in self.pages:
                 derived = []
@@ -505,18 +508,34 @@ class Garden:
                         derived.append(target)
                 # The navigation page itself is never published: it exists only
                 # to drive the sidebar/section/breadcrumb navigation order.
-                for key, val in list(self.names.items()):
-                    if val == nav_page_eid:
-                        del self.names[key]
-                del self.pages[nav_page_eid]
+                self.unpublish(nav_page_eid)
                 if derived:
                     self.nav_ids = derived
                 else:
                     self.warnings.add(f"navigation_page '{nav_page_title}' not found or empty; using config navigation")
             else:
                 self.warnings.add(f"navigation_page '{nav_page_title}' not found or empty; using config navigation")
+        # The Link Preview page's first image is the picture social sites show when
+        # a page of the site is shared; without one they get the site logo.
+        self.preview_image = None
+        preview_page = self.resolve(config.get('link_preview_page', 'Link Preview'))
+        if preview_page in self.pages:
+            self.preview_image = self.first_image(preview_page)
+            self.unpublish(preview_page)
+        if self.preview_image is None and 'link_preview_page' in config:
+            self.warnings.add(f"link_preview_page '{config['link_preview_page']}' "
+                              'not found or has no image; using the site logo')
+        # Pages tagged with the admin tag (#garden-admin), and the tag's own page,
+        # are never published. They go only now, because the special pages above
+        # are usually tagged too and must still be read first.
+        admin_tag = config.get('admin_tag', 'garden-admin').casefold()
+        tag_ids = {i for i, n in entities.items() if n.get('block/name') == admin_tag}
+        for eid, n in list(self.pages.items()):
+            if eid in tag_ids or tag_ids & set(values(n.get('block/tags'))):
+                self.unpublish(eid)
         if self.nav_ids is None:
             self.nav_ids = [eid for eid in (self.resolve(label) for label in config.get('navigation', [])) if eid in self.pages]
+        self.nav_ids = [eid for eid in self.nav_ids if eid in self.pages]
         self.sections = {}
         if self.url_style == 'sections':
             for nav_eid in self.nav_ids:
@@ -576,6 +595,45 @@ class Garden:
     def href(self, path):
         """Prefix a site-root-relative path (starting with '/') with base_path."""
         return self.base_path + path
+
+    def absolute(self, path):
+        """Full URL of a site-root-relative path. The configured url may already
+        end in base_path (https://host/sub), which must not be doubled."""
+        root = self.config.get('url', '').rstrip('/')
+        if self.base_path and root.endswith(self.base_path):
+            root = root[:-len(self.base_path)]
+        return root + self.href(path)
+
+    def unpublish(self, eid):
+        """Drop a page from the site; links to it render as plain text."""
+        for key, val in list(self.names.items()):
+            if val == eid:
+                del self.names[key]
+        self.pages.pop(eid, None)
+
+    def first_image(self, eid):
+        """Site URL of the first image under a page or block, in outline order."""
+        for child in self.children.get(eid, ()):
+            n = self.entities[child]
+            ext = str(n.get('logseq.property.asset/type', '')).lower()
+            if ext in IMAGE_TYPES:
+                candidates = [n.get('logseq.property.asset/external-url')
+                              or f'assets/{n["block/uuid"]}.{ext}']
+            else:
+                candidates = MD_IMAGE.findall(n.get('block/title', ''))
+            for raw in candidates:
+                suffix = Path(urlsplit(raw).path).suffix.lower().lstrip('.')
+                if suffix not in IMAGE_TYPES:
+                    continue
+                if urlsplit(raw).scheme in ('http', 'https'):
+                    return raw
+                url = self.asset_url(raw)
+                if url:
+                    return url
+            found = self.first_image(child)
+            if found:
+                return found
+        return None
 
     def record_link(self, eid):
         target = self.owner(eid)
@@ -845,7 +903,7 @@ class Garden:
         src = self.link_url(raw)
         title = escape(n.get('block/title', 'Attachment'))
         href = escape(src, quote=True)
-        if ext in ('png','jpg','jpeg','webp','gif','avif') and download_name(src) is None:
+        if ext in IMAGE_TYPES and download_name(src) is None:
             dims = ''.join(f' {a}="{int(n[k])}"' for a, k in [('width','logseq.property.asset/width'),('height','logseq.property.asset/height')] if n.get(k))
             return f'<figure><a href="{href}"><img src="{href}" alt="{title}"{dims} loading="lazy" decoding="async"></a></figure>'
         if ext in ('mp3', 'ogg', 'wav', 'm4a', 'flac'):
@@ -1105,11 +1163,22 @@ class Garden:
                 current = ' aria-current="page"' if url == self.urls[eid] else ''
                 nav.append(f'<a href="{escape(self.href(self.urls[eid]))}"{current}><span class="nav-dot">◦</span>{escape(label)}</a>')
         site = escape(self.config['title'])
-        canonical = self.config.get('url', '').rstrip('/') + self.href(url)
+        canonical = self.absolute(url)
         desc = escape(description or self.config['description'], quote=True)
         meta = f'<p class="page-meta">Updated {escape(date)}</p>' if date else ''
         logo_hash = sha256((self.branding / 'logo.svg').read_bytes()).hexdigest()[:12]
         document_title = site if home else escape(title) + ' · ' + site
+        if self.preview_image:
+            image = self.preview_image
+            if not urlsplit(image).scheme:
+                image = self.absolute(image[len(self.base_path):])
+            share_image = (f'<meta property="og:image" '
+                           f'content="{escape(image, quote=True)}">'
+                           '<meta name="twitter:card" content="summary_large_image">')
+        else:
+            logo = self.absolute('/static/img/logo.png')
+            share_image = (f'<meta property="og:image" '
+                           f'content="{escape(logo, quote=True)}">')
         author = self.config.get('author')
         license_config = self.config.get('license')
         license_name, license_url = None, None
@@ -1147,7 +1216,7 @@ class Garden:
 <html lang="{escape(self.config.get('language', 'en'))}" data-base="{escape(self.base_path)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>{document_title}</title><meta name="description" content="{desc}">
 <link rel="canonical" href="{escape(canonical, quote=True)}"><meta property="og:title" content="{escape(title, quote=True)}"><meta property="og:description" content="{desc}"><meta property="og:type" content="website"><meta property="og:url" content="{escape(canonical, quote=True)}">
-<link rel="icon" type="image/svg+xml" href="{escape(self.href(f'/site/logo-{logo_hash}.svg'), quote=True)}"><link rel="icon" type="image/png" sizes="512x512" href="{escape(self.href(f'/static/img/logo.png?v={logo_hash}'), quote=True)}"><link rel="apple-touch-icon" href="{escape(self.href(f'/static/img/logo.png?v={logo_hash}'), quote=True)}"><meta property="og:image" content="{escape(self.config.get('url', '').rstrip('/') + self.href('/static/img/logo.png'), quote=True)}"><script src="{escape(self.href(theme_js), quote=True)}"></script><link rel="stylesheet" href="{escape(self.href(css), quote=True)}"><script src="{escape(self.href(js), quote=True)}" defer></script>{extra_head}</head>
+<link rel="icon" type="image/svg+xml" href="{escape(self.href(f'/site/logo-{logo_hash}.svg'), quote=True)}"><link rel="icon" type="image/png" sizes="512x512" href="{escape(self.href(f'/static/img/logo.png?v={logo_hash}'), quote=True)}"><link rel="apple-touch-icon" href="{escape(self.href(f'/static/img/logo.png?v={logo_hash}'), quote=True)}">{share_image}<script src="{escape(self.href(theme_js), quote=True)}"></script><link rel="stylesheet" href="{escape(self.href(css), quote=True)}"><script src="{escape(self.href(js), quote=True)}" defer></script>{extra_head}</head>
 <body><a class="skip" href="#content">Skip to content</a>
 <aside class="sidebar"><a class="brand" href="{escape(self.href('/'))}"><span>{site}</span></a>
 <details class="site-nav" open><summary>Explore</summary><nav aria-label="Main navigation"><a href="{escape(self.href('/'))}">⌂ &nbsp; Home</a><a href="{escape(self.href('/pages/'))}">▤ &nbsp; All pages</a><a href="{escape(self.href('/pages/#search'))}">⌕ &nbsp; Search</a><a href="{escape(self.href('/graph/'))}">◌ &nbsp; Graph view</a><p class="nav-label">{escape(self.config.get('navigation_label', 'Topics'))}</p>{''.join(nav)}</nav></details>
@@ -1182,7 +1251,7 @@ process.stdout.write(JSON.stringify(input.map(([s, display]) => {
     result = subprocess.run(['node', '-e', script, str(katex.resolve())], input=json.dumps(list(garden.math)), text=True, capture_output=True, check=True)
     rendered = json.loads(result.stdout)
     output = []
-    for (source, _), value in zip(garden.math, rendered):
+    for (source, _), value in zip(garden.math, rendered, strict=False):
         if 'error' in value:
             garden.warnings.add('Math retained as source: ' + value['error'][:180])
             output.append('<code class="math-source">' + escape(source) + '</code>')
@@ -1326,10 +1395,9 @@ Publisher notices, when supplied, are listed separately below.</p>'''
         shutil.copy2(icon, dest / 'favicon.png')
         shutil.copy2(logo, dest / f'site/logo-{logo_hash}.svg')
         (dest / '_headers').write_text(HEADERS, encoding='utf-8')
-        base = config.get('url', '').rstrip('/')
-        sitemap = '<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + ''.join('<url><loc>' + escape(base + garden.href(url)) + '</loc></url>' for url in documents) + '</urlset>'
+        sitemap = '<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + ''.join('<url><loc>' + escape(garden.absolute(url)) + '</loc></url>' for url in documents) + '</urlset>'
         (dest / 'sitemap.xml').write_text(sitemap, encoding='utf-8')
-        (dest / 'robots.txt').write_text('User-agent: *\nAllow: /\nSitemap: ' + base + garden.base_path + '/sitemap.xml\n')
+        (dest / 'robots.txt').write_text('User-agent: *\nAllow: /\nSitemap: ' + garden.absolute('/sitemap.xml') + '\n')
         (dest / '.static-garden-build').write_text('Generated by static-garden/build.py\n')
         report = {'pages':len(garden.pages), 'graph_nodes':len(graph['nodes']), 'graph_edges':len(graph['links']), 'graph_json_bytes':len(graph_json.encode()), 'graph_javascript_bytes':len(graph_js.encode()), 'blocks':len(garden.rendered_ids), 'assets':len(garden.assets), 'equations':len(equations), 'input_html_bytes':(source/'index.html').stat().st_size, 'homepage_html_bytes':(dest/'index.html').stat().st_size, 'css_bytes':len(css.encode()), 'javascript_bytes':len(js.encode()), 'warnings':sorted(garden.warnings)}
         # Build report lives next to the output, not inside the deployed website.

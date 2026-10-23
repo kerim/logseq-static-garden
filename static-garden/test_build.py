@@ -169,13 +169,22 @@ class PublishingTests(unittest.TestCase):
         self.assertIn(31, g.pages)
         self.assertFalse(g.warnings)
 
+    def test_hidden_properties_page_is_found_by_its_default_title(self):
+        self._with_properties()
+        g = Garden(self.nodes, self.root, self.config)
+        self.assertNotIn('Draft', g.page_content(5))
+        self.assertNotIn(32, g.pages)
+        self.assertFalse(g.warnings)
+
     def test_properties_all_shown_without_hidden_properties_page(self):
         self._with_properties()
+        self.nodes[32].update({'block/title': 'Property notes', 'block/name': 'property notes'})
         g = Garden(self.nodes, self.root, self.config)
         content = g.page_content(5)
         self.assertIn('Draft', content)
         self.assertIn('Manual', content)
         self.assertIn(32, g.pages)
+        self.assertFalse(g.warnings)
 
     def test_missing_hidden_properties_page_warns_and_shows_all(self):
         self._with_properties()
@@ -728,6 +737,87 @@ class NavigationPageTests(unittest.TestCase):
         g = Garden(self.nodes, self.root, config)
         self.assertEqual(g.urls[2], '/security/')
         self.assertEqual(g.urls[3], '/taiwan/')
+
+
+class AdminPageTests(unittest.TestCase):
+    """Pages tagged #garden-admin stay off the site; Topics, Hidden Properties
+    and Link Preview are found by their default titles."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        uid = lambda i: '66666666-6666-4666-8666-%012d' % i
+        self.uid = uid
+        self.nodes = {
+            1: node('Home', uid(1), **{'block/name': 'home'}),
+            2: node('Security', uid(2), **{'block/name': 'security'}),
+            3: node('garden-admin', uid(3), **{'block/name': 'garden-admin', 'db/ident': 'user.class/garden-admin-x'}),
+            4: node('Topics', uid(4), **{'block/name': 'topics', 'block/tags': [3]}),
+            5: node('[[Security]]', uid(5), **{'block/page': 4, 'block/parent': 4, 'block/order': 'a0', 'block/refs': [2]}),
+            6: node('Admin', uid(6), **{'block/name': 'admin', 'block/tags': [3]}),
+            7: node('[[Topics]] [[Link Preview]]', uid(7), **{'block/page': 6, 'block/parent': 6, 'block/order': 'a0', 'block/refs': [4, 8]}),
+            8: node('Link Preview', uid(8), **{'block/name': 'link preview', 'block/tags': [3]}),
+            9: node('See [[Admin]]', uid(9), **{'block/page': 1, 'block/parent': 1, 'block/order': 'a0', 'block/refs': [6]})}
+        self.config = {'home_page': 'Home', 'title': 'FAQ', 'description': 'Notes',
+                       'url': 'https://example.org/faq', 'base_path': '/faq'}
+
+    def garden(self, **config):
+        return Garden(self.nodes, self.root, {**self.config, **config})
+
+    def add_asset_image(self, parent, order='a0', ext='png', eid=20):
+        (self.root / 'assets').mkdir(exist_ok=True)
+        (self.root / 'assets' / f'{self.uid(eid)}.{ext}').write_bytes(b'x')
+        self.nodes[eid] = node('screenshot', self.uid(eid), **{
+            'block/page': 8, 'block/parent': parent, 'block/order': order,
+            'logseq.property.asset/type': ext})
+
+    def test_tagged_pages_and_the_tag_page_are_not_published(self):
+        g = self.garden()
+        self.assertEqual(set(g.pages), {1, 2})
+        self.assertIn('<span class="unavailable">Admin</span>', g.page_content(1))
+
+    def test_tagged_topics_page_still_drives_navigation_without_config(self):
+        g = self.garden()
+        self.assertEqual(g.nav_ids, [2])
+        self.assertFalse(g.warnings)
+
+    def test_admin_tag_can_be_renamed(self):
+        g = self.garden(admin_tag='site-admin')
+        self.assertIn(6, g.pages)
+
+    def test_first_image_on_link_preview_page_is_the_share_image(self):
+        self.nodes[21] = node('Intro text', self.uid(21), **{'block/page': 8, 'block/parent': 8, 'block/order': 'a0'})
+        self.add_asset_image(21, 'a0', eid=20)
+        self.add_asset_image(8, 'a1', 'jpg', eid=22)
+        g = self.garden()
+        html = g.shell('Security', '', '/security/', '/a.css', '/a.js', theme_js='/t.js')
+        self.assertIn(f'<meta property="og:image" content="https://example.org/faq/assets/{self.uid(20)}.png">', html)
+        self.assertIn('<meta name="twitter:card" content="summary_large_image">', html)
+        self.assertIn(f'assets/{self.uid(20)}.png', g.assets)
+        self.assertNotIn(8, g.pages)
+
+    def test_markdown_image_link_can_be_the_share_image(self):
+        self.nodes[21] = node('![cover](https://img.example.net/cover.webp)', self.uid(21),
+                              **{'block/page': 8, 'block/parent': 8, 'block/order': 'a0'})
+        html = self.garden().shell('Home', '', '/', '/a.css', '/a.js', theme_js='/t.js')
+        self.assertIn('content="https://img.example.net/cover.webp"', html)
+
+    def test_without_preview_image_the_logo_is_shared(self):
+        html = self.garden().shell('Home', '', '/', '/a.css', '/a.js', theme_js='/t.js')
+        self.assertIn('<meta property="og:image" content="https://example.org/faq/static/img/logo.png">', html)
+        self.assertNotIn('twitter:card', html)
+
+    def test_site_url_ending_in_base_path_is_not_doubled(self):
+        html = self.garden().shell('Home', '', '/', '/a.css', '/a.js', theme_js='/t.js')
+        self.assertIn('<link rel="canonical" href="https://example.org/faq/">', html)
+        g = self.garden(url='https://example.org')
+        self.assertEqual(g.absolute('/x/'), 'https://example.org/faq/x/')
+
+    def test_named_link_preview_page_without_image_warns(self):
+        g = self.garden(link_preview_page='Link Preview')
+        self.assertIsNone(g.preview_image)
+        self.assertTrue(any('link_preview_page' in w for w in g.warnings))
 
 
 class CalloutTests(unittest.TestCase):
